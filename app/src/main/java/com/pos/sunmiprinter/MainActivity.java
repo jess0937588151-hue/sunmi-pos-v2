@@ -25,7 +25,7 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private IWoyouService printerService;
     private static final String TAG = "SunmiPOS";
-    private static final String POS_URL = "https://your-pos-website.com";
+    private static final String POS_URL = "https://jess0937588151-hue.github.io/2234/";
 
     private ServiceConnection connPrinter = new ServiceConnection() {
         @Override
