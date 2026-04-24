@@ -1,4 +1,5 @@
-package com.example.sunmiprinter;
+package com.pos.sunmiprinter;
+;
 
 import android.os.Bundle;
 import android.util.Log;
