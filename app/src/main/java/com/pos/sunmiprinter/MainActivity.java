@@ -69,11 +69,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bindPrinterService() {
-        Intent intent = new Intent();
-        intent.setPackage("woyou.aidlservice.jiuiv5");
-        intent.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
-        bindService(intent, connPrinter, Context.BIND_AUTO_CREATE);
+    Intent intent = new Intent();
+    intent.setPackage("woyou.aidlservice.jiuiv5");
+    intent.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
+    boolean result = bindService(intent, connPrinter, Context.BIND_AUTO_CREATE);
+    Log.d(TAG, "bindService result=" + result);
+    if (!result) {
+        // Try alternative binding
+        Intent intent2 = new Intent();
+        intent2.setComponent(new android.content.ComponentName(
+            "woyou.aidlservice.jiuiv5",
+            "woyou.aidlservice.jiuiv5.MainService"
+        ));
+        boolean result2 = bindService(intent2, connPrinter, Context.BIND_AUTO_CREATE);
+        Log.d(TAG, "bindService attempt2 result=" + result2);
     }
+}
+
 
     @Override
     protected void onDestroy() {
@@ -159,81 +171,75 @@ public class MainActivity extends AppCompatActivity {
             } catch (RemoteException e) { Log.e(TAG, "err", e); }
         }
 
-        @JavascriptInterface
-        public void printReceipt(String jsonData) {
-            if (printerService == null) return;
-            try {
-                org.json.JSONObject data = new org.json.JSONObject(jsonData);
-
-                printerService.setAlignment(1, callback);
-                printerService.printTextWithFont(
-                    data.optString("shopName", "") + "\n", "", 32, callback);
-
-                if (data.has("subtitle"))
-                    printerService.printTextWithFont(
-                        data.getString("subtitle") + "\n", "", 24, callback);
-
-                printerService.setAlignment(0, callback);
-                printerService.printTextWithFont(
-                    "--------------------------------\n", "", 24, callback);
-
-                if (data.has("orderNumber"))
-                    printerService.printTextWithFont(
-                        "單號: " + data.getString("orderNumber") + "\n", "", 24, callback);
-                if (data.has("dateTime"))
-                    printerService.printTextWithFont(
-                        "時間: " + data.getString("dateTime") + "\n", "", 24, callback);
-                if (data.has("orderType"))
-                    printerService.printTextWithFont(
-                        "類型: " + data.getString("orderType") + "\n", "", 24, callback);
-
-                printerService.printTextWithFont(
-                    "--------------------------------\n", "", 24, callback);
-
-                if (data.has("items")) {
-                    org.json.JSONArray items = data.getJSONArray("items");
-                    for (int i = 0; i < items.length(); i++) {
-                        org.json.JSONObject item = items.getJSONObject(i);
-                        printerService.printColumnsString(
-                            new String[]{
-                                item.optString("name", ""),
-                                "x" + item.optInt("qty", 1),
-                                "$" + item.optInt("price", 0)
-                            },
-                            new int[]{2, 1, 1},
-                            new int[]{0, 1, 2}, callback);
-
-                        if (item.has("options") && item.getString("options").length() > 0)
-                            printerService.printTextWithFont(
-                                "  " + item.getString("options") + "\n", "", 20, callback);
-                        if (item.has("note") && item.getString("note").length() > 0)
-                            printerService.printTextWithFont(
-                                "  *" + item.getString("note") + "\n", "", 20, callback);
-                    }
+       @JavascriptInterface
+public void printReceipt(final String jsonStr) {
+    Log.d(TAG, "printReceipt called, printerService=" + (printerService != null));
+    if (printerService == null) return;
+    try {
+        org.json.JSONObject json = new org.json.JSONObject(jsonStr);
+        
+        printerService.printerInit(callback);
+        
+        String shopName = json.optString("shopName", "POS");
+        printerService.setAlignment(1, callback);
+        printerService.printTextWithFont(shopName + "\n", "", 28, callback);
+        
+        String subtitle = json.optString("subtitle", "");
+        if (!subtitle.isEmpty()) {
+            printerService.printTextWithFont(subtitle + "\n", "", 24, callback);
+        }
+        
+        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
+        
+        String orderNumber = json.optString("orderNumber", "");
+        if (!orderNumber.isEmpty()) {
+            printerService.setAlignment(0, callback);
+            printerService.printTextWithFont("單號：" + orderNumber + "\n", "", 22, callback);
+        }
+        String dateTime = json.optString("dateTime", "");
+        if (!dateTime.isEmpty()) {
+            printerService.printTextWithFont("時間：" + dateTime + "\n", "", 22, callback);
+        }
+        String orderType = json.optString("orderType", "");
+        if (!orderType.isEmpty()) {
+            printerService.printTextWithFont("類型：" + orderType + "\n", "", 22, callback);
+        }
+        String paymentMethod = json.optString("paymentMethod", "");
+        if (!paymentMethod.isEmpty()) {
+            printerService.printTextWithFont("付款：" + paymentMethod + "\n", "", 22, callback);
+        }
+        
+        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
+        
+        org.json.JSONArray items = json.optJSONArray("items");
+        if (items != null) {
+            for (int i = 0; i < items.length(); i++) {
+                org.json.JSONObject item = items.getJSONObject(i);
+                String name = item.optString("name", "");
+                int qty = item.optInt("qty", 0);
+                int price = item.optInt("price", 0);
+                printerService.printTextWithFont(name + " x" + qty + "  $" + price + "\n", "", 22, callback);
+                String options = item.optString("options", "");
+                if (!options.isEmpty()) {
+                    printerService.printTextWithFont("  " + options + "\n", "", 18, callback);
                 }
+            }
+        }
+        
+        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
+        
+        String total = json.optString("total", "0");
+        printerService.setAlignment(1, callback);
+        printerService.printTextWithFont("合計：$" + total + "\n", "", 28, callback);
+        
+        printerService.lineWrap(4, callback);
+        printerService.cutPaper(callback);
+        
+    } catch (Exception e) {
+        Log.e(TAG, "printReceipt error: " + e.getMessage());
+    
 
-                printerService.printTextWithFont(
-                    "--------------------------------\n", "", 24, callback);
 
-                if (data.has("total")) {
-                    printerService.setAlignment(2, callback);
-                    printerService.printTextWithFont(
-                        "合計: $" + data.getString("total") + "\n", "", 32, callback);
-                }
-
-                if (data.has("paymentMethod")) {
-                    printerService.setAlignment(0, callback);
-                    printerService.printTextWithFont(
-                        "付款: " + data.getString("paymentMethod") + "\n", "", 24, callback);
-                }
-
-                printerService.setAlignment(1, callback);
-                printerService.printTextWithFont("\n謝謝光臨\n", "", 24, callback);
-
-                printerService.lineWrap(4, callback);
-                printerService.cutPaper(callback);
-
-            } catch (Exception e) { Log.e(TAG, "printReceipt err", e); }
         }
     }
 }
