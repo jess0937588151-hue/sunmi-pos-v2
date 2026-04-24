@@ -238,7 +238,7 @@ public void printReceipt(final String jsonStr) {
     } catch (Exception e) {
         Log.e(TAG, "printReceipt error: " + e.getMessage());
     
-
+}
 
         }
     }
