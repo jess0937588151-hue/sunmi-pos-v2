@@ -69,21 +69,30 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void bindPrinterService() {
+    // Attempt 1
     Intent intent = new Intent();
     intent.setPackage("woyou.aidlservice.jiuiv5");
     intent.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
     boolean result = bindService(intent, connPrinter, Context.BIND_AUTO_CREATE);
-    Log.d(TAG, "bindService result=" + result);
-    if (!result) {
-        // Try alternative binding
-        Intent intent2 = new Intent();
-        intent2.setComponent(new android.content.ComponentName(
-            "woyou.aidlservice.jiuiv5",
-            "woyou.aidlservice.jiuiv5.MainService"
-        ));
-        boolean result2 = bindService(intent2, connPrinter, Context.BIND_AUTO_CREATE);
-        Log.d(TAG, "bindService attempt2 result=" + result2);
-    }
+    Log.d(TAG, "bindService attempt1 result=" + result);
+    if (result) return;
+
+    // Attempt 2
+    Intent intent2 = new Intent();
+    intent2.setComponent(new android.content.ComponentName(
+        "woyou.aidlservice.jiuiv5",
+        "woyou.aidlservice.jiuiv5.MainService"
+    ));
+    boolean result2 = bindService(intent2, connPrinter, Context.BIND_AUTO_CREATE);
+    Log.d(TAG, "bindService attempt2 result=" + result2);
+    if (result2) return;
+
+    // Attempt 3 - Sunmi inner printer
+    Intent intent3 = new Intent();
+    intent3.setPackage("com.sunmi.extprinterservice");
+    intent3.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
+    boolean result3 = bindService(intent3, connPrinter, Context.BIND_AUTO_CREATE);
+    Log.d(TAG, "bindService attempt3 result=" + result3);
 }
 
 
