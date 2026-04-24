@@ -1,58 +1,31 @@
-package com.pos.sunmiprinter;
+package com.example.sunmiprinter;
 
-import android.annotation.SuppressLint;
-import android.content.ComponentName;
-import android.content.Context;
-import android.content.Intent;
-import android.content.ServiceConnection;
 import android.os.Bundle;
-import android.os.IBinder;
-import android.os.RemoteException;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-
-import android.support.v7.app.AppCompatActivity;
-
-import woyou.aidlservice.jiuiv5.IWoyouService;
-import woyou.aidlservice.jiuiv5.ICallback;
+import androidx.appcompat.app.AppCompatActivity;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = "SunmiPrinter";
+    private static final String POS_URL = "https://jinyunpeng1953.github.io/order-system/pos-page.html";
     private WebView webView;
-    private IWoyouService printerService;
-    private static final String TAG = "SunmiPOS";
-    private static final String POS_URL = "https://jess0937588151-hue.github.io/2234/";
+    private String serialPort = null;
 
-    private ServiceConnection connPrinter = new ServiceConnection() {
-        @Override
-        public void onServiceConnected(ComponentName name, IBinder service) {
-            printerService = IWoyouService.Stub.asInterface(service);
-            Log.d(TAG, "Printer service connected");
-        }
-        @Override
-        public void onServiceDisconnected(ComponentName name) {
-            printerService = null;
-        }
-    };
-
-    private ICallback callback = new ICallback.Stub() {
-        @Override public void onRunResult(boolean isSuccess) {}
-        @Override public void onReturnString(String result) {}
-        @Override public void onRaiseException(int code, String msg) {}
-        @Override public void onPrintResult(int code, String msg) {}
-    };
-
-    @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        webView = new WebView(this);
-        setContentView(webView);
+        setContentView(R.layout.activity_main);
 
+        webView = findViewById(R.id.webview);
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -62,193 +35,134 @@ public class MainActivity extends AppCompatActivity {
 
         webView.setWebViewClient(new WebViewClient());
         webView.setWebChromeClient(new WebChromeClient());
-        webView.addJavascriptInterface(new PrinterBridge(), "SunmiPrinter");
+        webView.addJavascriptInterface(new PrinterBridge(), "Android");
         webView.loadUrl(POS_URL);
 
-        bindPrinterService();
+        detectSerialPort();
     }
 
-    private void bindPrinterService() {
-    // Attempt 1
-    Intent intent = new Intent();
-    intent.setPackage("woyou.aidlservice.jiuiv5");
-    intent.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
-    boolean result = bindService(intent, connPrinter, Context.BIND_AUTO_CREATE);
-    Log.d(TAG, "bindService attempt1 result=" + result);
-    if (result) return;
-
-    // Attempt 2
-    Intent intent2 = new Intent();
-    intent2.setComponent(new android.content.ComponentName(
-        "woyou.aidlservice.jiuiv5",
-        "woyou.aidlservice.jiuiv5.MainService"
-    ));
-    boolean result2 = bindService(intent2, connPrinter, Context.BIND_AUTO_CREATE);
-    Log.d(TAG, "bindService attempt2 result=" + result2);
-    if (result2) return;
-
-    // Attempt 3 - Sunmi inner printer
-    Intent intent3 = new Intent();
-    intent3.setPackage("com.sunmi.extprinterservice");
-    intent3.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
-    boolean result3 = bindService(intent3, connPrinter, Context.BIND_AUTO_CREATE);
-    Log.d(TAG, "bindService attempt3 result=" + result3);
-}
-
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        try { unbindService(connPrinter); } catch (Exception e) {}
+    private void detectSerialPort() {
+        String[] candidates = {"/dev/ttyS0", "/dev/ttyS1", "/dev/ttyS2", "/dev/ttyS3"};
+        for (String path : candidates) {
+            File f = new File(path);
+            if (f.exists() && f.canWrite()) {
+                serialPort = path;
+                Log.d(TAG, "Serial port found: " + path);
+                return;
+            }
+        }
+        Log.w(TAG, "No writable serial port found");
     }
 
-    public class PrinterBridge {
+    private byte[] toGB18030(String text) {
+        try {
+            return text.getBytes("GB18030");
+        } catch (UnsupportedEncodingException e) {
+            return text.getBytes();
+        }
+    }
+
+    class PrinterBridge {
 
         @JavascriptInterface
         public boolean isConnected() {
-            return printerService != null;
-        }
-        @JavascriptInterface
-        public String debugInfo() {
-            return "printerService=" + (printerService != null ? "OK" : "NULL");
+            boolean ok = (serialPort != null);
+            Log.d(TAG, "isConnected=" + ok + " serialPort=" + serialPort);
+            return ok;
         }
 
         @JavascriptInterface
-        public void printText(String text, float fontSize) {
-            if (printerService == null) return;
-            try {
-                printerService.setAlignment(0, callback);
-                printerService.printTextWithFont(text + "\n", "", fontSize, callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+        public void printReceipt(final String jsonStr) {
+            Log.d(TAG, "printReceipt called, serialPort=" + serialPort);
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    OutputStream os = null;
+                    try {
+                        org.json.JSONObject json = new org.json.JSONObject(jsonStr);
 
-        @JavascriptInterface
-        public void printTextCenter(String text, float fontSize) {
-            if (printerService == null) return;
-            try {
-                printerService.setAlignment(1, callback);
-                printerService.printTextWithFont(text + "\n", "", fontSize, callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+                        if (serialPort == null) {
+                            Log.e(TAG, "No serial port available");
+                            return;
+                        }
 
-        @JavascriptInterface
-        public void printLine() {
-            if (printerService == null) return;
-            try {
-                printerService.setAlignment(0, callback);
-                printerService.printTextWithFont("--------------------------------\n", "", 24, callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+                        os = new FileOutputStream(serialPort);
 
-        @JavascriptInterface
-        public void printRow(String left, String right) {
-            if (printerService == null) return;
-            try {
-                printerService.printColumnsString(
-                    new String[]{left, right},
-                    new int[]{1, 1},
-                    new int[]{0, 2}, callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+                        // ESC @ - Initialize printer
+                        os.write(new byte[]{0x1B, 0x40});
 
-        @JavascriptInterface
-        public void printThreeColumns(String left, String center, String right) {
-            if (printerService == null) return;
-            try {
-                printerService.printColumnsString(
-                    new String[]{left, center, right},
-                    new int[]{2, 1, 1},
-                    new int[]{0, 1, 2}, callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+                        // Center alignment
+                        os.write(new byte[]{0x1B, 0x61, 0x01});
 
-        @JavascriptInterface
-        public void feedAndCut() {
-            if (printerService == null) return;
-            try {
-                printerService.lineWrap(4, callback);
-                printerService.cutPaper(callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+                        // Shop name (double size)
+                        os.write(new byte[]{0x1D, 0x21, 0x11});
+                        os.write(toGB18030(json.optString("shopName", "POS") + "\n"));
+                        os.write(new byte[]{0x1D, 0x21, 0x00});
 
-        @JavascriptInterface
-        public void openCashDrawer() {
-            if (printerService == null) return;
-            try {
-                printerService.sendRAWData(
-                    new byte[]{0x1B, 0x70, 0x00, 0x19, (byte)0xFA}, callback);
-            } catch (RemoteException e) { Log.e(TAG, "err", e); }
-        }
+                        String subtitle = json.optString("subtitle", "");
+                        if (!subtitle.isEmpty()) {
+                            os.write(toGB18030(subtitle + "\n"));
+                        }
 
-       @JavascriptInterface
-public void printReceipt(final String jsonStr) {
-    Log.d(TAG, "printReceipt called, printerService=" + (printerService != null));
-    if (printerService == null) return;
-    try {
-        org.json.JSONObject json = new org.json.JSONObject(jsonStr);
-        
-        printerService.printerInit(callback);
-        
-        String shopName = json.optString("shopName", "POS");
-        printerService.setAlignment(1, callback);
-        printerService.printTextWithFont(shopName + "\n", "", 28, callback);
-        
-        String subtitle = json.optString("subtitle", "");
-        if (!subtitle.isEmpty()) {
-            printerService.printTextWithFont(subtitle + "\n", "", 24, callback);
-        }
-        
-        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
-        
-        String orderNumber = json.optString("orderNumber", "");
-        if (!orderNumber.isEmpty()) {
-            printerService.setAlignment(0, callback);
-            printerService.printTextWithFont("單號：" + orderNumber + "\n", "", 22, callback);
-        }
-        String dateTime = json.optString("dateTime", "");
-        if (!dateTime.isEmpty()) {
-            printerService.printTextWithFont("時間：" + dateTime + "\n", "", 22, callback);
-        }
-        String orderType = json.optString("orderType", "");
-        if (!orderType.isEmpty()) {
-            printerService.printTextWithFont("類型：" + orderType + "\n", "", 22, callback);
-        }
-        String paymentMethod = json.optString("paymentMethod", "");
-        if (!paymentMethod.isEmpty()) {
-            printerService.printTextWithFont("付款：" + paymentMethod + "\n", "", 22, callback);
-        }
-        
-        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
-        
-        org.json.JSONArray items = json.optJSONArray("items");
-        if (items != null) {
-            for (int i = 0; i < items.length(); i++) {
-                org.json.JSONObject item = items.getJSONObject(i);
-                String name = item.optString("name", "");
-                int qty = item.optInt("qty", 0);
-                int price = item.optInt("price", 0);
-                printerService.printTextWithFont(name + " x" + qty + "  $" + price + "\n", "", 22, callback);
-                String options = item.optString("options", "");
-                if (!options.isEmpty()) {
-                    printerService.printTextWithFont("  " + options + "\n", "", 18, callback);
+                        os.write(toGB18030("--------------------------------\n"));
+
+                        // Left alignment
+                        os.write(new byte[]{0x1B, 0x61, 0x00});
+
+                        String orderNumber = json.optString("orderNumber", "");
+                        if (!orderNumber.isEmpty()) os.write(toGB18030("單號：" + orderNumber + "\n"));
+                        String dateTime = json.optString("dateTime", "");
+                        if (!dateTime.isEmpty()) os.write(toGB18030("時間：" + dateTime + "\n"));
+                        String orderType = json.optString("orderType", "");
+                        if (!orderType.isEmpty()) os.write(toGB18030("類型：" + orderType + "\n"));
+                        String paymentMethod = json.optString("paymentMethod", "");
+                        if (!paymentMethod.isEmpty()) os.write(toGB18030("付款：" + paymentMethod + "\n"));
+
+                        os.write(toGB18030("--------------------------------\n"));
+
+                        // Items
+                        org.json.JSONArray items = json.optJSONArray("items");
+                        if (items != null) {
+                            for (int i = 0; i < items.length(); i++) {
+                                org.json.JSONObject item = items.getJSONObject(i);
+                                String name = item.optString("name", "");
+                                int qty = item.optInt("qty", 0);
+                                int price = item.optInt("price", 0);
+                                os.write(toGB18030(name + " x" + qty + "  $" + price + "\n"));
+                                String options = item.optString("options", "");
+                                if (!options.isEmpty()) {
+                                    os.write(toGB18030("  " + options + "\n"));
+                                }
+                            }
+                        }
+
+                        os.write(toGB18030("--------------------------------\n"));
+
+                        // Center - Total (double size)
+                        os.write(new byte[]{0x1B, 0x61, 0x01});
+                        os.write(new byte[]{0x1D, 0x21, 0x11});
+                        os.write(toGB18030("合計：$" + json.optString("total", "0") + "\n"));
+                        os.write(new byte[]{0x1D, 0x21, 0x00});
+
+                        // Feed and cut
+                        os.write(new byte[]{0x1B, 0x64, 0x04});
+                        os.write(new byte[]{0x1D, 0x56, 0x01});
+
+                        // Open cash drawer
+                        os.write(new byte[]{0x10, 0x14, 0x01, 0x00, 0x05});
+
+                        os.flush();
+                        Log.d(TAG, "Print completed via serial port");
+
+                    } catch (Exception e) {
+                        Log.e(TAG, "printReceipt error: " + e.getMessage());
+                    } finally {
+                        if (os != null) {
+                            try { os.close(); } catch (Exception ignored) {}
+                        }
+                    }
                 }
-            }
-        }
-        
-        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
-        
-        String total = json.optString("total", "0");
-        printerService.setAlignment(1, callback);
-        printerService.printTextWithFont("合計：$" + total + "\n", "", 28, callback);
-        
-        printerService.lineWrap(4, callback);
-        printerService.cutPaper(callback);
-        
-    } catch (Exception e) {
-        Log.e(TAG, "printReceipt error: " + e.getMessage());
-    
-}
-
+            }).start();
         }
     }
 }
