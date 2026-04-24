@@ -87,6 +87,10 @@ public class MainActivity extends AppCompatActivity {
         public boolean isConnected() {
             return printerService != null;
         }
+        @JavascriptInterface
+        public String debugInfo() {
+            return "printerService=" + (printerService != null ? "OK" : "NULL");
+        }
 
         @JavascriptInterface
         public void printText(String text, float fontSize) {
