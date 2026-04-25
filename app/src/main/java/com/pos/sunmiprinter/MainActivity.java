@@ -73,7 +73,16 @@ public class MainActivity extends AppCompatActivity {
     intent.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
     boolean r1 = bindService(intent, connPrinter, Context.BIND_AUTO_CREATE);
     Log.d(TAG, "bind attempt1 result=" + r1);
+
+    final boolean result = r1;
+    runOnUiThread(new Runnable() {
+        @Override
+        public void run() {
+            webView.loadUrl("javascript:alert('bindService result=" + result + "')");
+        }
+    });
 }
+
 
 
     class PrinterBridge {
