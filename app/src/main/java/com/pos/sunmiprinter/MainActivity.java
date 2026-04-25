@@ -1,7 +1,12 @@
 package com.pos.sunmiprinter;
-;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
 import android.os.Bundle;
+import android.os.IBinder;
+import android.os.RemoteException;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -9,17 +14,37 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import androidx.appcompat.app.AppCompatActivity;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
+import woyou.aidlservice.jiuiv5.IWoyouService;
+import woyou.aidlservice.jiuiv5.ICallback;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "SunmiPrinter";
     private static final String POS_URL = "https://jess0937588151-hue.github.io/2234/";
     private WebView webView;
-    private String serialPort = null;
+    private IWoyouService printerService;
+
+    private ICallback callback = new ICallback.Stub() {
+        @Override
+        public void onRunResult(boolean isSuccess) throws RemoteException {}
+        @Override
+        public void onReturnString(String result) throws RemoteException {}
+        @Override
+        public void onRaiseException(int code, String msg) throws RemoteException {}
+    };
+
+    private ServiceConnection connPrinter = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            printerService = IWoyouService.Stub.asInterface(service);
+            Log.d(TAG, "Printer service connected!");
+        }
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            printerService = null;
+            Log.d(TAG, "Printer service disconnected");
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,89 +64,58 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new PrinterBridge(), "Android");
         webView.loadUrl(POS_URL);
 
-        detectSerialPort();
+        bindPrinterService();
     }
 
-    private void detectSerialPort() {
-        String[] candidates = {"/dev/ttyS0", "/dev/ttyS1", "/dev/ttyS2", "/dev/ttyS3"};
-        for (String path : candidates) {
-            File f = new File(path);
-            if (f.exists() && f.canWrite()) {
-                serialPort = path;
-                Log.d(TAG, "Serial port found: " + path);
-                return;
-            }
-        }
-        Log.w(TAG, "No writable serial port found");
-    }
+    private void bindPrinterService() {
+    Intent intent = new Intent();
+    intent.setPackage("woyou.aidlservice.jiuiv5");
+    intent.setAction("woyou.aidlservice.jiuiv5.IWoyouService");
+    boolean r1 = bindService(intent, connPrinter, Context.BIND_AUTO_CREATE);
+    Log.d(TAG, "bind attempt1 result=" + r1);
+}
 
-    private byte[] toGB18030(String text) {
-        try {
-            return text.getBytes("GB18030");
-        } catch (UnsupportedEncodingException e) {
-            return text.getBytes();
-        }
-    }
 
     class PrinterBridge {
 
         @JavascriptInterface
         public boolean isConnected() {
-            boolean ok = (serialPort != null);
-            Log.d(TAG, "isConnected=" + ok + " serialPort=" + serialPort);
+            boolean ok = (printerService != null);
+            Log.d(TAG, "isConnected=" + ok);
             return ok;
         }
 
         @JavascriptInterface
         public void printReceipt(final String jsonStr) {
-            Log.d(TAG, "printReceipt called, serialPort=" + serialPort);
+            Log.d(TAG, "printReceipt called, service=" + (printerService != null));
+            if (printerService == null) return;
             new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    OutputStream os = null;
                     try {
                         org.json.JSONObject json = new org.json.JSONObject(jsonStr);
+                        printerService.printerInit(callback);
 
-                        if (serialPort == null) {
-                            Log.e(TAG, "No serial port available");
-                            return;
-                        }
-
-                        os = new FileOutputStream(serialPort);
-
-                        // ESC @ - Initialize printer
-                        os.write(new byte[]{0x1B, 0x40});
-
-                        // Center alignment
-                        os.write(new byte[]{0x1B, 0x61, 0x01});
-
-                        // Shop name (double size)
-                        os.write(new byte[]{0x1D, 0x21, 0x11});
-                        os.write(toGB18030(json.optString("shopName", "POS") + "\n"));
-                        os.write(new byte[]{0x1D, 0x21, 0x00});
+                        printerService.setAlignment(1, callback);
+                        printerService.printTextWithFont(json.optString("shopName", "POS") + "\n", "", 28, callback);
 
                         String subtitle = json.optString("subtitle", "");
-                        if (!subtitle.isEmpty()) {
-                            os.write(toGB18030(subtitle + "\n"));
-                        }
+                        if (!subtitle.isEmpty()) printerService.printTextWithFont(subtitle + "\n", "", 24, callback);
 
-                        os.write(toGB18030("--------------------------------\n"));
-
-                        // Left alignment
-                        os.write(new byte[]{0x1B, 0x61, 0x00});
+                        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
+                        printerService.setAlignment(0, callback);
 
                         String orderNumber = json.optString("orderNumber", "");
-                        if (!orderNumber.isEmpty()) os.write(toGB18030("單號：" + orderNumber + "\n"));
+                        if (!orderNumber.isEmpty()) printerService.printTextWithFont("單號：" + orderNumber + "\n", "", 22, callback);
                         String dateTime = json.optString("dateTime", "");
-                        if (!dateTime.isEmpty()) os.write(toGB18030("時間：" + dateTime + "\n"));
+                        if (!dateTime.isEmpty()) printerService.printTextWithFont("時間：" + dateTime + "\n", "", 22, callback);
                         String orderType = json.optString("orderType", "");
-                        if (!orderType.isEmpty()) os.write(toGB18030("類型：" + orderType + "\n"));
+                        if (!orderType.isEmpty()) printerService.printTextWithFont("類型：" + orderType + "\n", "", 22, callback);
                         String paymentMethod = json.optString("paymentMethod", "");
-                        if (!paymentMethod.isEmpty()) os.write(toGB18030("付款：" + paymentMethod + "\n"));
+                        if (!paymentMethod.isEmpty()) printerService.printTextWithFont("付款：" + paymentMethod + "\n", "", 22, callback);
 
-                        os.write(toGB18030("--------------------------------\n"));
+                        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
 
-                        // Items
                         org.json.JSONArray items = json.optJSONArray("items");
                         if (items != null) {
                             for (int i = 0; i < items.length(); i++) {
@@ -129,41 +123,29 @@ public class MainActivity extends AppCompatActivity {
                                 String name = item.optString("name", "");
                                 int qty = item.optInt("qty", 0);
                                 int price = item.optInt("price", 0);
-                                os.write(toGB18030(name + " x" + qty + "  $" + price + "\n"));
+                                printerService.printTextWithFont(name + " x" + qty + "  $" + price + "\n", "", 22, callback);
                                 String options = item.optString("options", "");
-                                if (!options.isEmpty()) {
-                                    os.write(toGB18030("  " + options + "\n"));
-                                }
+                                if (!options.isEmpty()) printerService.printTextWithFont("  " + options + "\n", "", 18, callback);
                             }
                         }
 
-                        os.write(toGB18030("--------------------------------\n"));
-
-                        // Center - Total (double size)
-                        os.write(new byte[]{0x1B, 0x61, 0x01});
-                        os.write(new byte[]{0x1D, 0x21, 0x11});
-                        os.write(toGB18030("合計：$" + json.optString("total", "0") + "\n"));
-                        os.write(new byte[]{0x1D, 0x21, 0x00});
-
-                        // Feed and cut
-                        os.write(new byte[]{0x1B, 0x64, 0x04});
-                        os.write(new byte[]{0x1D, 0x56, 0x01});
-
-                        // Open cash drawer
-                        os.write(new byte[]{0x10, 0x14, 0x01, 0x00, 0x05});
-
-                        os.flush();
-                        Log.d(TAG, "Print completed via serial port");
+                        printerService.printTextWithFont("--------------------------------\n", "", 20, callback);
+                        printerService.setAlignment(1, callback);
+                        printerService.printTextWithFont("合計：$" + json.optString("total", "0") + "\n", "", 28, callback);
+                        printerService.lineWrap(4, callback);
+                        printerService.cutPaper(callback);
 
                     } catch (Exception e) {
                         Log.e(TAG, "printReceipt error: " + e.getMessage());
-                    } finally {
-                        if (os != null) {
-                            try { os.close(); } catch (Exception ignored) {}
-                        }
                     }
                 }
             }).start();
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        try { unbindService(connPrinter); } catch (Exception ignored) {}
     }
 }
