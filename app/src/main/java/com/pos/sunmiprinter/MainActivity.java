@@ -17,7 +17,7 @@ import java.io.UnsupportedEncodingException;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "SunmiPrinter";
-    private static final String POS_URL = "https://jinyunpeng1953.github.io/order-system/pos-page.html";
+    private static final String POS_URL = "https://jess0937588151-hue.github.io/2234/";
     private WebView webView;
     private String serialPort = null;
 
