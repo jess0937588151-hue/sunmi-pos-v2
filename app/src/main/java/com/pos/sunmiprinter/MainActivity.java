@@ -1,113 +1,121 @@
 package com.pos.sunmiprinter;
 
 import android.annotation.SuppressLint;
+import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.View;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.ImageButton;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.pos.sunmiprinter.printer.BluetoothPrinterManager;
+import com.pos.sunmiprinter.printer.NetworkPrinterManager;
 import com.pos.sunmiprinter.printer.SunmiPrinterManager;
 import com.pos.sunmiprinter.web.PrintJsBridge;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-//
 public class MainActivity extends AppCompatActivity {
 
-    private static final String POS_URL = "https://jess0937588151-hue.github.io/2234/";
-    private static final String JS_INTERFACE_NAME = "SunmiPrinter";
+    private static final String TAG = "MainActivity";
+    private static final int REQUEST_SETTINGS = 1001;
 
     private WebView webView;
-    private SunmiPrinterManager printerManager;
+    private SunmiPrinterManager sunmiPrinter;
+    private AppSettings settings;
+    private PrintJsBridge jsBridge;
+    private Handler handler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        webView = findViewById(R.id.webview);
+        handler = new Handler(Looper.getMainLooper());
+        settings = new AppSettings(this);
 
-        printerManager = new SunmiPrinterManager(this);
-        printerManager.bind();
+        // 初始化内建印表机
+        sunmiPrinter = new SunmiPrinterManager(this);
+        sunmiPrinter.bind();
 
+        // 初始化 WebView
         setupWebView();
-        webView.loadUrl(POS_URL);
+
+        // 设定按钮
+        ImageButton btnSettings = findViewById(R.id.btn_settings);
+        btnSettings.setOnClickListener(v -> {
+            Intent intent = new Intent(MainActivity.this, SettingsActivity.class);
+            startActivityForResult(intent, REQUEST_SETTINGS);
+        });
+
+        // 重新载入按钮
+        ImageButton btnReload = findViewById(R.id.btn_reload);
+        btnReload.setOnClickListener(v -> {
+            webView.clearCache(true);
+            webView.loadUrl(settings.getUrl());
+            Toast.makeText(this, "重新载入", Toast.LENGTH_SHORT).show();
+        });
+
+        // 载入网址
+        webView.loadUrl(settings.getUrl());
+
+        // 自动连线蓝牙
+        autoConnectBluetooth();
+
+        // 自动连线网路印表机
+        autoConnectNetwork();
     }
 
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    @SuppressLint("SetJavaScriptEnabled")
     private void setupWebView() {
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setLoadsImagesAutomatically(true);
-        settings.setAllowFileAccess(true);
-        settings.setBuiltInZoomControls(false);
-        settings.setDisplayZoomControls(false);
-        settings.setUseWideViewPort(true);
-        settings.setLoadWithOverviewMode(true);
-        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setDatabaseEnabled(true);
+        webView = findViewById(R.id.webview);
 
-        webView.addJavascriptInterface(new PrintJsBridge(this, printerManager, webView), JS_INTERFACE_NAME);
-        webView.setWebChromeClient(new WebChromeClient());
+        WebSettings ws = webView.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setDatabaseEnabled(true);
+        ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+        ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
+        ws.setBuiltInZoomControls(false);
+        ws.setSupportZoom(false);
+        ws.setUseWideViewPort(true);
+        ws.setLoadWithOverviewMode(true);
+        ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
+
+        // JS Bridge
+        jsBridge = new PrintJsBridge(this, webView, sunmiPrinter);
+        webView.addJavascriptInterface(jsBridge, "SunmiPrinter");
+
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                injectAssetScript("inject-bridge.js");
-                injectAssetScript("site-autoprint-adapter.js");
+                injectBridge();
             }
         });
+
+        webView.setWebChromeClient(new WebChromeClient());
     }
 
-    private void injectAssetScript(String fileName) {
-        String js = loadAssetText(fileName);
-        if (js != null && !js.trim().isEmpty()) {
-            webView.evaluateJavascript(js, null);
-        }
-    }
-
-    private String loadAssetText(String fileName) {
-        InputStream inputStream = null;
-        BufferedReader reader = null;
+    private void injectBridge() {
+        // 注入 inject-bridge.js
         try {
-            inputStream = getAssets().open(fileName);
-            reader = new BufferedReader(new InputStreamReader(inputStream));
-            StringBuilder builder = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                builder.append(line).append('\n');
-            }
-            return builder.toString();
-        } catch (IOException e) {
-            return null;
-        } finally {
-            if (reader != null) try { reader.close(); } catch (IOException ignored) {}
-            if (inputStream != null) try { inputStream.close(); } catch (IOException ignored) {}
-        }
-    }
-
-    @Override
-    protected void onDestroy() {
-        if (printerManager != null) printerManager.unbind();
-        if (webView != null) {
-            webView.removeJavascriptInterface(JS_INTERFACE_NAME);
-            webView.destroy();
-        }
-        super.onDestroy();
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
-        }
-    }
-}
+            java.io.InputStream is = getAssets().open("inject-bridge.js");
+            byte[] buf = new byte[is.available()];
+            is.read(buf);
+            is.close();
+            String js = new String(buf, "UTF-8");
+            webView.evaluateJavascript(js
