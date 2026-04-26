@@ -1,6 +1,7 @@
 package woyou.aidlservice.jiuiv5;
 
 import woyou.aidlservice.jiuiv5.ICallback;
+import android.graphics.Bitmap;
 
 interface IWoyouService {
     boolean postPrintData(String packageName, in byte[] data, int offset, int length);
@@ -36,4 +37,8 @@ interface IWoyouService {
     boolean isForcedUnderline();
     int getForcedRowHeight();
     int getFontName();
+void printBitmap(in Bitmap bitmap, in ICallback callback);
+void printBarCode(String data, int symbology, int height, int width, int textPosition, in ICallback callback);
+void printQRCode(String data, int moduleSize, int errorLevel, in ICallback callback);
+
 }
