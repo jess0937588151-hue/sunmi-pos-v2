@@ -1,223 +1,369 @@
 package com.pos.sunmiprinter.web;
 
 import android.content.Context;
-import android.os.Build;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.Html;
+import android.util.Base64;
+import android.util.Log;
 import android.webkit.JavascriptInterface;
-import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.widget.Toast;
 
+import com.pos.sunmiprinter.AppSettings;
 import com.pos.sunmiprinter.printer.BluetoothPrinterManager;
+import com.pos.sunmiprinter.printer.NetworkPrinterManager;
 import com.pos.sunmiprinter.printer.SunmiPrinterManager;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
 
 public class PrintJsBridge {
 
-    private final Context context;
-    private final SunmiPrinterManager printerManager;
-    private final BluetoothPrinterManager btPrinter;
-    private final WebView webView;
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private static final String TAG = "PrintJsBridge";
 
-    public PrintJsBridge(Context context, SunmiPrinterManager printerManager, WebView webView) {
+    private final Context context;
+    private final WebView webView;
+    private final SunmiPrinterManager sunmi;
+    private final BluetoothPrinterManager bt;
+    private final NetworkPrinterManager net;
+    private final AppSettings settings;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    public PrintJsBridge(Context context, WebView webView, SunmiPrinterManager sunmi) {
         this.context = context;
-        this.printerManager = printerManager;
         this.webView = webView;
-        this.btPrinter = new BluetoothPrinterManager();
+        this.sunmi = sunmi;
+        this.bt = new BluetoothPrinterManager();
+        this.net = new NetworkPrinterManager();
+        this.settings = new AppSettings(context);
     }
 
-    // ===== 內建印表機 =====
+    // ==================== 设定 ====================
+
+    @JavascriptInterface
+    public String getSettings() {
+        return settings.toJson();
+    }
+
+    @JavascriptInterface
+    public void saveSettings(String jsonStr) {
+        settings.fromJson(jsonStr);
+    }
+
+    @JavascriptInterface
+    public void resetSettings() {
+        settings.resetAll();
+    }
+
+    // ==================== 内建印表机 — 状态 ====================
 
     @JavascriptInterface
     public boolean isPrinterReady() {
-        return printerManager.isConnected();
+        return sunmi.isConnected();
     }
 
     @JavascriptInterface
     public int getPrinterStatus() {
-        return printerManager.getPrinterStatus();
+        return sunmi.getPrinterStatus();
+    }
+
+    // ==================== 内建印表机 — 基本列印 ====================
+
+    @JavascriptInterface
+    public boolean printText(String text) {
+        return sunmi.printText(text);
     }
 
     @JavascriptInterface
-    public void printText(final String text) {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                boolean ok = printerManager.printText(text);
-                toast(ok ? "已送出列印" : "印表機尚未連線");
-            }
-        });
+    public boolean printTextWithFont(String text, String typeface, float size) {
+        return sunmi.printTextWithFont(text, typeface, size);
     }
 
     @JavascriptInterface
-    public void printReceipt(final String title, final String body) {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                boolean ok = printerManager.printReceipt(title, body);
-                toast(ok ? "已送出收據列印" : "印表機尚未連線");
-            }
-        });
+    public boolean printColumns(String[] texts, int[] widths, int[] aligns) {
+        return sunmi.printColumns(texts, widths, aligns);
     }
 
     @JavascriptInterface
-    public void printPosReceipt(final String jsonStr) {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                boolean ok = printerManager.printPosReceipt(jsonStr);
-                toast(ok ? "已送出 POS 收據列印" : "印表機尚未連線");
-            }
-        });
+    public boolean printBitmapBase64(String base64) {
+        try {
+            byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+            Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (bmp == null) return false;
+            return sunmi.printBitmap(bmp);
+        } catch (Exception e) {
+            Log.e(TAG, "printBitmapBase64 error", e);
+            return false;
+        }
     }
 
     @JavascriptInterface
-    public void printHtml(final String title, final String html) {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                String plain;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    plain = Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString();
-                } else {
-                    plain = Html.fromHtml(html).toString();
+    public boolean printBarcode(String data, int symbology, int height, int width, int textPosition) {
+        return sunmi.printBarcode(data, symbology, height, width, textPosition);
+    }
+
+    @JavascriptInterface
+    public boolean printQRCode(String data, int moduleSize, int errorLevel) {
+        return sunmi.printQRCode(data, moduleSize, errorLevel);
+    }
+
+    // ==================== 内建印表机 — 收据列印 ====================
+
+    @JavascriptInterface
+    public boolean printReceipt(String title, String body) {
+        return sunmi.printReceipt(title, body);
+    }
+
+    @JavascriptInterface
+    public boolean printPosReceipt(String jsonStr) {
+        return sunmi.printPosReceipt(jsonStr);
+    }
+
+    @JavascriptInterface
+    public boolean printReceiptJson(String jsonStr) {
+        return sunmi.printReceiptJson(jsonStr);
+    }
+
+    @JavascriptInterface
+    public boolean printHtml(String title, String html) {
+        return sunmi.printHtml(title, html);
+    }
+
+    @JavascriptInterface
+    public boolean printTestReceipt() {
+        return sunmi.printTestReceipt();
+    }
+
+    @JavascriptInterface
+    public void printCurrentPage() {
+        handler.post(() -> webView.evaluateJavascript(
+            "(function(){ return document.title + '\\n' + document.body.innerText; })()",
+            value -> {
+                if (value != null) {
+                    String text = value.replace("\\n", "\n")
+                                       .replace("\\\"", "\"");
+                    if (text.startsWith("\"")) text = text.substring(1);
+                    if (text.endsWith("\"")) text = text.substring(0, text.length() - 1);
+                    sunmi.printReceipt("页面列印", text);
                 }
-                boolean ok = printerManager.printReceipt(title, plain);
-                toast(ok ? "已送出 HTML 列印" : "印表機尚未連線");
             }
-        });
+        ));
+    }
+
+    // ==================== 内建印表机 — 硬体控制 ====================
+
+    @JavascriptInterface
+    public boolean cutPaper() {
+        return sunmi.cutPaper();
     }
 
     @JavascriptInterface
-    public void printReceiptJson(final String json) {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    JSONObject object = new JSONObject(json);
-                    String title = object.optString("title", "Receipt");
-                    StringBuilder body = new StringBuilder();
-                    body.append(object.optString("subtitle", ""));
-                    if (body.length() > 0) body.append("\n");
-                    JSONArray lines = object.optJSONArray("lines");
-                    if (lines != null) {
-                        for (int i = 0; i < lines.length(); i++) {
-                            body.append(lines.optString(i)).append("\n");
-                        }
-                    }
-                    String footer = object.optString("footer", "");
-                    if (footer != null && footer.length() > 0) body.append(footer).append("\n");
-                    boolean ok = printerManager.printReceipt(title, body.toString());
-                    toast(ok ? "已送出 JSON 收據列印" : "印表機尚未連線");
-                } catch (Exception e) {
-                    toast("JSON 列印格式錯誤");
-                }
-            }
-        });
-    }
-
-    // ===== 切紙 & 開錢箱 =====
-
-    @JavascriptInterface
-    public void cutPaper() {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                printerManager.cutPaper();
-            }
-        });
+    public boolean openCashDrawer() {
+        boolean ok = sunmi.openCashDrawer();
+        handler.post(() -> toast(ok ? "钱箱已开启" : "开钱箱失败"));
+        return ok;
     }
 
     @JavascriptInterface
-    public void openCashDrawer() {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                boolean ok = printerManager.openCashDrawer();
-                toast(ok ? "錢箱已開啟" : "開錢箱失敗");
-            }
-        });
+    public boolean buzzer() {
+        return sunmi.buzzer();
     }
 
-    // ===== 藍牙印表機 =====
+    @JavascriptInterface
+    public boolean sendRawData(String base64) {
+        try {
+            byte[] data = Base64.decode(base64, Base64.DEFAULT);
+            return sunmi.sendRawData(data);
+        } catch (Exception e) {
+            Log.e(TAG, "sendRawData error", e);
+            return false;
+        }
+    }
+
+    // ==================== 蓝牙印表机 ====================
 
     @JavascriptInterface
     public String getBtPrinters() {
-        return btPrinter.getPairedPrintersJson();
+        return bt.getPairedPrintersJson();
     }
 
     @JavascriptInterface
     public boolean connectBtPrinter(final String address) {
-        return btPrinter.connect(address);
+        final boolean[] result = {false};
+        Thread t = new Thread(() -> result[0] = bt.connect(address));
+        t.start();
+        try { t.join(5000); } catch (InterruptedException ignored) {}
+        if (result[0]) {
+            settings.setBtAddress(address);
+            settings.setBtEnabled(true);
+        }
+        handler.post(() -> toast(result[0] ? "蓝牙印表机已连线" : "蓝牙连线失败"));
+        return result[0];
     }
 
     @JavascriptInterface
     public void disconnectBtPrinter() {
-        btPrinter.disconnect();
+        bt.disconnect();
+        handler.post(() -> toast("蓝牙印表机已断线"));
     }
 
     @JavascriptInterface
     public boolean isBtPrinterConnected() {
-        return btPrinter.isConnected();
+        return bt.isConnected();
     }
 
     @JavascriptInterface
-    public void printKitchenBt(final String jsonStr) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final boolean ok = btPrinter.printKitchenReceipt(jsonStr);
-                mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        toast(ok ? "廚房單已送出(藍牙)" : "藍牙印表機未連線");
-                    }
-                });
-            }
-        }).start();
+    public String getBtConnectedAddress() {
+        return bt.getConnectedAddress();
     }
-
-    // ===== 列印目前頁面 =====
 
     @JavascriptInterface
-    public void printCurrentPage() {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                webView.evaluateJavascript(
-                    "(function(){var title=document.title||'Web Print';var body=(document.body&&document.body.innerText)||'';return JSON.stringify({title:title,body:body});})()",
-                    new ValueCallback<String>() {
-                        @Override
-                        public void onReceiveValue(String value) {
-                            try {
-                                if (value == null) { toast("無法讀取頁面內容"); return; }
-                                String unwrapped = value;
-                                if (unwrapped.startsWith("\"") && unwrapped.endsWith("\"")) {
-                                    unwrapped = unwrapped.substring(1, unwrapped.length() - 1)
-                                            .replace("\\\\", "\\")
-                                            .replace("\\\"", "\"")
-                                            .replace("\\n", "\n");
-                                }
-                                JSONObject object = new JSONObject(unwrapped);
-                                boolean ok = printerManager.printReceipt(
-                                    object.optString("title", "Web Print"),
-                                    object.optString("body", ""));
-                                toast(ok ? "已送出目前頁面列印" : "印表機尚未連線");
-                            } catch (Exception e) {
-                                toast("頁面列印解析失敗");
-                            }
-                        }
-                    });
-            }
-        });
+    public boolean btPrintText(String text) {
+        return bt.printText(text);
     }
 
-    private void toast(String message) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+    @JavascriptInterface
+    public boolean btPrintReceipt(String jsonStr) {
+        return bt.printPosReceipt(jsonStr);
+    }
+
+    @JavascriptInterface
+    public boolean btPrintKitchen(String jsonStr) {
+        return bt.printKitchenReceipt(jsonStr);
+    }
+
+    @JavascriptInterface
+    public boolean btPrintBarcode(String data, int type) {
+        return bt.printBarcode(data, type);
+    }
+
+    @JavascriptInterface
+    public boolean btPrintQRCode(String data, int moduleSize) {
+        return bt.printQRCode(data, moduleSize);
+    }
+
+    @JavascriptInterface
+    public boolean btCutPaper() {
+        return bt.cutPaper();
+    }
+
+    @JavascriptInterface
+    public boolean btOpenCashDrawer() {
+        return bt.openCashDrawer();
+    }
+
+    @JavascriptInterface
+    public boolean btBuzzer() {
+        return bt.buzzer();
+    }
+
+    @JavascriptInterface
+    public boolean btSendRawData(String base64) {
+        try {
+            byte[] data = Base64.decode(base64, Base64.DEFAULT);
+            return bt.sendRawData(data);
+        } catch (Exception e) {
+            Log.e(TAG, "btSendRawData error", e);
+            return false;
+        }
+    }
+
+    // ==================== 网路印表机 ====================
+
+    @JavascriptInterface
+    public boolean connectNetPrinter(final String ip, final int port) {
+        final boolean[] result = {false};
+        Thread t = new Thread(() -> result[0] = net.connect(ip, port));
+        t.start();
+        try { t.join(5000); } catch (InterruptedException ignored) {}
+        if (result[0]) {
+            settings.setNetIp(ip);
+            settings.setNetPort(port);
+            settings.setNetEnabled(true);
+        }
+        handler.post(() -> toast(result[0] ? "网路印表机已连线 " + ip : "网路连线失败"));
+        return result[0];
+    }
+
+    @JavascriptInterface
+    public void disconnectNetPrinter() {
+        net.disconnect();
+        handler.post(() -> toast("网路印表机已断线"));
+    }
+
+    @JavascriptInterface
+    public boolean isNetPrinterConnected() {
+        return net.isConnected();
+    }
+
+    @JavascriptInterface
+    public String getNetConnectedInfo() {
+        return net.getConnectedInfo();
+    }
+
+    @JavascriptInterface
+    public boolean netPrintText(String text) {
+        return net.printText(text);
+    }
+
+    @JavascriptInterface
+    public boolean netPrintReceipt(String jsonStr) {
+        return net.printPosReceipt(jsonStr);
+    }
+
+    @JavascriptInterface
+    public boolean netPrintKitchen(String jsonStr) {
+        return net.printKitchenReceipt(jsonStr);
+    }
+
+    @JavascriptInterface
+    public boolean netPrintBarcode(String data, int type) {
+        return net.printBarcode(data, type);
+    }
+
+    @JavascriptInterface
+    public boolean netPrintQRCode(String data, int moduleSize) {
+        return net.printQRCode(data, moduleSize);
+    }
+
+    @JavascriptInterface
+    public boolean netCutPaper() {
+        return net.cutPaper();
+    }
+
+    @JavascriptInterface
+    public boolean netOpenCashDrawer() {
+        return net.openCashDrawer();
+    }
+
+    @JavascriptInterface
+    public boolean netBuzzer() {
+        return net.buzzer();
+    }
+
+    @JavascriptInterface
+    public boolean netSendRawData(String base64) {
+        try {
+            byte[] data = Base64.decode(base64, Base64.DEFAULT);
+            return net.sendRawData(data);
+        } catch (Exception e) {
+            Log.e(TAG, "netSendRawData error", e);
+            return false;
+        }
+    }
+
+    // ==================== 内部方法（供 MainActivity 调用）====================
+
+    public boolean connectBtPrinterInternal(String address) {
+        return bt.connect(address);
+    }
+
+    public boolean connectNetPrinterInternal(String ip, int port) {
+        return net.connect(ip, port);
+    }
+
+    // ==================== 工具 ====================
+
+    private void toast(String msg) {
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show();
     }
 }
