@@ -209,4 +209,29 @@ public class SunmiPrinterManager {
         if (value == null) return "\n";
         return value.endsWith("\n") ? value : value + "\n";
     }
+        public boolean cutPaper() {
+        if (!isConnected()) return false;
+        try {
+            printerService.lineWrap(3, callbackAdapter);
+            byte[] cutCmd = {0x1D, 0x56, 0x01};
+            printerService.sendRAWData(cutCmd, callbackAdapter);
+            return true;
+        } catch (RemoteException e) {
+            Log.e(TAG, "cutPaper error", e);
+            return false;
+        }
+    }
+
+    public boolean openCashDrawer() {
+        if (!isConnected()) return false;
+        try {
+            byte[] drawerCmd = {0x10, 0x14, 0x01, 0x00, 0x05};
+            printerService.sendRAWData(drawerCmd, callbackAdapter);
+            return true;
+        } catch (RemoteException e) {
+            Log.e(TAG, "openCashDrawer error", e);
+            return false;
+        }
+    }
+
 }
