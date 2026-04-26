@@ -10,6 +10,7 @@ import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.widget.Toast;
 
+import com.pos.sunmiprinter.printer.BluetoothPrinterManager;
 import com.pos.sunmiprinter.printer.SunmiPrinterManager;
 
 import org.json.JSONArray;
@@ -19,6 +20,7 @@ public class PrintJsBridge {
 
     private final Context context;
     private final SunmiPrinterManager printerManager;
+    private final BluetoothPrinterManager btPrinter;
     private final WebView webView;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -26,7 +28,10 @@ public class PrintJsBridge {
         this.context = context;
         this.printerManager = printerManager;
         this.webView = webView;
+        this.btPrinter = new BluetoothPrinterManager();
     }
+
+    // ===== 內建印表機 =====
 
     @JavascriptInterface
     public boolean isPrinterReady() {
@@ -61,6 +66,17 @@ public class PrintJsBridge {
     }
 
     @JavascriptInterface
+    public void printPosReceipt(final String jsonStr) {
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = printerManager.printPosReceipt(jsonStr);
+                toast(ok ? "已送出 POS 收據列印" : "印表機尚未連線");
+            }
+        });
+    }
+
+    @JavascriptInterface
     public void printHtml(final String title, final String html) {
         mainHandler.post(new Runnable() {
             @Override
@@ -73,18 +89,6 @@ public class PrintJsBridge {
                 }
                 boolean ok = printerManager.printReceipt(title, plain);
                 toast(ok ? "已送出 HTML 列印" : "印表機尚未連線");
-            }
-        });
-    }
-
-    /* === POS 專用：接收 JSON 格式收據 === */
-    @JavascriptInterface
-    public void printPosReceipt(final String jsonStr) {
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                boolean ok = printerManager.printPosReceipt(jsonStr);
-                toast(ok ? "已送出 POS 收據列印" : "印表機尚未連線");
             }
         });
     }
@@ -116,6 +120,69 @@ public class PrintJsBridge {
             }
         });
     }
+
+    // ===== 切紙 & 開錢箱 =====
+
+    @JavascriptInterface
+    public void cutPaper() {
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                printerManager.cutPaper();
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void openCashDrawer() {
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = printerManager.openCashDrawer();
+                toast(ok ? "錢箱已開啟" : "開錢箱失敗");
+            }
+        });
+    }
+
+    // ===== 藍牙印表機 =====
+
+    @JavascriptInterface
+    public String getBtPrinters() {
+        return btPrinter.getPairedPrintersJson();
+    }
+
+    @JavascriptInterface
+    public boolean connectBtPrinter(final String address) {
+        return btPrinter.connect(address);
+    }
+
+    @JavascriptInterface
+    public void disconnectBtPrinter() {
+        btPrinter.disconnect();
+    }
+
+    @JavascriptInterface
+    public boolean isBtPrinterConnected() {
+        return btPrinter.isConnected();
+    }
+
+    @JavascriptInterface
+    public void printKitchenBt(final String jsonStr) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = btPrinter.printKitchenReceipt(jsonStr);
+                mainHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        toast(ok ? "廚房單已送出(藍牙)" : "藍牙印表機未連線");
+                    }
+                });
+            }
+        }).start();
+    }
+
+    // ===== 列印目前頁面 =====
 
     @JavascriptInterface
     public void printCurrentPage() {
