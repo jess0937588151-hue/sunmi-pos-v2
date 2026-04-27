@@ -11,28 +11,31 @@
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|right"
+        android:layout_gravity="bottom|left"
         android:orientation="horizontal"
         android:padding="4dp"
-        android:background="#80000000">
+        android:layout_marginBottom="8dp"
+        android:layout_marginStart="8dp"
+        android:background="#80000000"
+        android:alpha="0.6">
 
         <ImageButton
             android:id="@+id/btn_reload"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
             android:src="@android:drawable/ic_menu_rotate"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="重新载入"
+            android:contentDescription="重新載入"
             android:tint="#FFFFFF"
-            android:layout_marginEnd="8dp" />
+            android:layout_marginEnd="6dp" />
 
         <ImageButton
             android:id="@+id/btn_settings"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
             android:src="@android:drawable/ic_menu_preferences"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="设定"
+            android:contentDescription="設定"
             android:tint="#FFFFFF" />
 
     </LinearLayout>
