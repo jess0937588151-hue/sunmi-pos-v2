@@ -1,19 +1,19 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 31
-buildToolsVersion "30.0.3"
-
-
+    compileSdkVersion 28
+    buildToolsVersion "30.0.3"
 
     defaultConfig {
-    applicationId "com.pos.sunmiprinter"
-    minSdkVersion 21
-    targetSdkVersion 25
-    versionCode 3
-    versionName "3.0"
-}
+        applicationId "com.pos.sunmiprinter"
+        minSdkVersion 19
+        targetSdkVersion 25
+        versionCode 4
+        versionName "4.0"
 
+        // 低記憶體優化
+        multiDexEnabled false
+    }
 
     buildFeatures {
         aidl true
@@ -21,6 +21,11 @@ buildToolsVersion "30.0.3"
 
     buildTypes {
         release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
             minifyEnabled false
         }
     }
@@ -29,8 +34,25 @@ buildToolsVersion "30.0.3"
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+
+    // 減少 APK 體積
+    packagingOptions {
+        exclude 'META-INF/LICENSE'
+        exclude 'META-INF/NOTICE'
+    }
+
+    // 限制語言資源只保留中文
+    defaultConfig {
+        resConfigs "zh", "zh-rTW", "zh-rCN"
+    }
+
+    dexOptions {
+        javaMaxHeapSize "1g"
+        preDexLibraries false
+    }
 }
 
 dependencies {
-implementation 'androidx.appcompat:appcompat:1.4.2'
+    implementation 'androidx.appcompat:appcompat:1.4.2'
+    implementation 'com.sunmi:printerlibrary:1.0.23'
 }
