@@ -1,4 +1,4 @@
-apply plugin: 'com.android.application'//
+apply plugin: 'com.android.application'
 
 android {
     compileSdkVersion 28
@@ -6,13 +6,12 @@ android {
 
     defaultConfig {
         applicationId "com.pos.sunmiprinter"
-        minSdkVersion 19
+        minSdkVersion 25
         targetSdkVersion 25
-        versionCode 4
-        versionName "4.0"
-
-        // 低記憶體優化
+        versionCode 5
+        versionName "5.0"
         multiDexEnabled false
+        resConfigs "zh", "zh-rTW", "zh-rCN"
     }
 
     buildFeatures {
@@ -35,15 +34,9 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
-    // 減少 APK 體積
     packagingOptions {
         exclude 'META-INF/LICENSE'
         exclude 'META-INF/NOTICE'
-    }
-
-    // 限制語言資源只保留中文
-    defaultConfig {
-        resConfigs "zh", "zh-rTW", "zh-rCN"
     }
 
     dexOptions {
