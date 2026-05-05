@@ -1,43 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- activity_main.xml：服務狀態頁，WebView 已完全移除 -->
+<!-- MainActivity 使用純程式碼建立 UI，此 layout 僅作為空殼佔位 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
-
-    <WebView
-        android:id="@+id/webview"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <LinearLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|left"
-        android:orientation="horizontal"
-        android:padding="4dp"
-        android:layout_marginBottom="8dp"
-        android:layout_marginStart="8dp"
-        android:background="#80000000"
-        android:alpha="0.6">
-
-        <ImageButton
-            android:id="@+id/btn_reload"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:src="@android:drawable/ic_menu_rotate"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="重新載入"
-            android:tint="#FFFFFF"
-            android:layout_marginEnd="6dp" />
-
-        <ImageButton
-            android:id="@+id/btn_settings"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:src="@android:drawable/ic_menu_preferences"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="設定"
-            android:tint="#FFFFFF" />
-
-    </LinearLayout>
-
-</FrameLayout>
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF" />

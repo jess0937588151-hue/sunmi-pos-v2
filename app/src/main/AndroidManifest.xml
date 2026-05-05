@@ -2,22 +2,34 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.pos.sunmiprinter">
 
+    <!-- 網路權限（HTTP Server + 網路印表機）-->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- 藍牙權限 -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <!-- API 31+ 才需要，這裡加了沒差，舊版忽略 -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+
+    <!-- 開機自動啟動 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Foreground Service（API 28 才需要，但加了向下相容無妨）-->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/ic_menu_manage"
-        android:label="POS Printer"
+        android:label="POS 列印服務"
         android:theme="@style/Theme.AppCompat.NoActionBar"
         android:usesCleartextTraffic="true"
         android:largeHeap="false"
         android:hardwareAccelerated="true">
 
+        <!-- 主畫面：服務狀態頁（WebView 已移除）-->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
@@ -29,11 +41,31 @@
             </intent-filter>
         </activity>
 
+        <!-- 設定頁 -->
         <activity
             android:name=".SettingsActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:screenOrientation="landscape"
-            android:label="印表機設定" />
+            android:label="列印服務設定" />
+
+        <!-- 後台列印服務（Foreground Service）-->
+        <service
+            android:name=".PrintService"
+            android:exported="false"
+            android:stopWithTask="false" />
+
+        <!-- 開機自動啟動 Receiver -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- 部分 Android 裝置使用 QUICKBOOT_POWERON -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

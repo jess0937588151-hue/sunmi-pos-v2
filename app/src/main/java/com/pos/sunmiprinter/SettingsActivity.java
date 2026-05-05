@@ -2,10 +2,14 @@ package com.pos.sunmiprinter;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.text.InputType;
 import android.util.Log;
@@ -33,13 +37,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * 設定頁
+ * 相較原版改動：
+ *  - 移除「POS 網址」欄位（已不需要 WebView）
+ *  - 新增「HTTP Server 埠號」欄位（預設 8080）
+ *  - 儲存後通知 PrintService 重啟 HTTP Server
+ */
 public class SettingsActivity extends AppCompatActivity {
 
     private static final String TAG = "SettingsActivity";
-    private static final int COLOR_TEXT = Color.parseColor("#212121");
-    private static final int COLOR_HINT = Color.parseColor("#757575");
+    private static final int COLOR_TEXT    = Color.parseColor("#212121");
+    private static final int COLOR_HINT    = Color.parseColor("#757575");
     private static final int COLOR_SECTION = Color.parseColor("#1976D2");
-    private static final int COLOR_BG = Color.WHITE;
+    private static final int COLOR_BG      = Color.WHITE;
 
     private AppSettings settings;
     private SunmiPrinterManager sunmiPrinter;
@@ -47,33 +58,82 @@ public class SettingsActivity extends AppCompatActivity {
     private NetworkPrinterManager netPrinter;
     private Handler handler;
 
-    private boolean btChanged = false;
+    private boolean btChanged  = false;
     private boolean netChanged = false;
+    private boolean portChanged = false;
 
-    private EditText edtUrl;
+    // ── HTTP Server ──
+    private EditText edtHttpPort;
+
+    // ── 內建印表機 ──
     private CheckBox chkSunmiEnabled, chkSunmiAutoCut, chkSunmiAutoDrawer, chkSunmiBuzzer;
-    private Spinner spnSunmiRole;
-    private CheckBox chkBtEnabled, chkBtAutoConnect, chkBtAutoCut, chkBtBuzzer;
-    private Spinner spnBtDevice, spnBtRole;
-    private CheckBox chkNetEnabled, chkNetAutoConnect, chkNetAutoCut, chkNetBuzzer;
-    private EditText edtNetIp, edtNetPort;
-    private Spinner spnNetRole;
-    private EditText edtStoreName, edtStorePhone, edtStoreAddress, edtReceiptFooter, edtPrintCopies;
+    private Spinner  spnSunmiRole;
     private TextView tvSunmiStatus;
 
+    // ── 藍牙印表機 ──
+    private CheckBox chkBtEnabled, chkBtAutoConnect, chkBtAutoCut, chkBtBuzzer;
+    private Spinner  spnBtDevice, spnBtRole;
     private List<String> btDeviceAddresses = new ArrayList<>();
+
+    // ── 網路印表機 ──
+    private CheckBox chkNetEnabled, chkNetAutoConnect, chkNetAutoCut, chkNetBuzzer;
+    private EditText edtNetIp, edtNetPort;
+    private Spinner  spnNetRole;
+
+    // ── 收據 ──
+    private EditText edtStoreName, edtStorePhone, edtStoreAddress, edtReceiptFooter, edtPrintCopies;
+
+    // ── PrintService 綁定（儲存後通知重啟）──
+    private PrintService printService;
+    private boolean serviceBound = false;
+    private final ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override public void onServiceConnected(ComponentName n, IBinder b) {
+            printService = ((PrintService.LocalBinder) b).getService();
+            serviceBound = true;
+        }
+        @Override public void onServiceDisconnected(ComponentName n) {
+            printService = null;
+            serviceBound = false;
+        }
+    };
+
+    // ==================== 生命週期 ====================
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        handler = new Handler(Looper.getMainLooper());
+        handler  = new Handler(Looper.getMainLooper());
         settings = new AppSettings(this);
+
         sunmiPrinter = new SunmiPrinterManager(this);
         sunmiPrinter.bind();
-        btPrinter = new BluetoothPrinterManager();
+        btPrinter  = new BluetoothPrinterManager();
         netPrinter = new NetworkPrinterManager();
 
+        // 綁定 PrintService（不強制建立）
+        bindService(new Intent(this, PrintService.class),
+                serviceConnection, Context.BIND_AUTO_CREATE);
+
+        buildUi();
+
+        // 2 秒後更新 Sunmi 狀態
+        handler.postDelayed(this::refreshSunmiStatus, 2000);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (sunmiPrinter != null) sunmiPrinter.unbind();
+        if (serviceBound) {
+            unbindService(serviceConnection);
+            serviceBound = false;
+        }
+    }
+
+    // ==================== 建立 UI ====================
+
+    private void buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(COLOR_BG);
         scroll.setPadding(dp(16), dp(16), dp(16), dp(16));
@@ -81,18 +141,21 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // ===== 網址設定 =====
-        root.addView(sectionTitle("網站設定"));
-        root.addView(label("POS 網址："));
-        edtUrl = editText(settings.getUrl(), InputType.TYPE_TEXT_VARIATION_URI);
-        root.addView(edtUrl);
+        // ===== HTTP Server 埠號 =====
+        root.addView(sectionTitle("HTTP Server 設定"));
+        root.addView(label("監聽埠號（預設 8080）："));
+        edtHttpPort = editText(String.valueOf(settings.getHttpPort()), InputType.TYPE_CLASS_NUMBER);
+        edtHttpPort.setHint("例如 8080");
+        root.addView(edtHttpPort);
 
-        Button btnResetUrl = neutralButton("恢復預設網址");
-        btnResetUrl.setOnClickListener(v -> edtUrl.setText(settings.getDefaultUrl()));
-        root.addView(btnResetUrl);
+        TextView tvPortNote = new TextView(this);
+        tvPortNote.setText("網頁端呼叫：http://127.0.0.1:" + settings.getHttpPort() + "/print/sunmi");
+        tvPortNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tvPortNote.setTextColor(COLOR_HINT);
+        tvPortNote.setPadding(0, dp(2), 0, dp(8));
+        root.addView(tvPortNote);
 
         root.addView(divider());
 
@@ -106,88 +169,71 @@ public class SettingsActivity extends AppCompatActivity {
         tvSunmiStatus.setPadding(0, dp(4), 0, dp(8));
         root.addView(tvSunmiStatus);
 
-        handler.postDelayed(this::refreshSunmiStatus, 2000);
-
-        chkSunmiEnabled = checkBox("啟用內建印表機", settings.isSunmiEnabled());
+        chkSunmiEnabled    = checkBox("啟用內建印表機",   settings.isSunmiEnabled());
+        chkSunmiAutoCut    = checkBox("自動切紙",         settings.isSunmiAutoCut());
+        chkSunmiAutoDrawer = checkBox("自動開錢箱",       settings.isSunmiAutoDrawer());
+        chkSunmiBuzzer     = checkBox("蜂鳴器提醒",       settings.isSunmiBuzzer());
         root.addView(chkSunmiEnabled);
-        chkSunmiAutoCut = checkBox("自動切紙", settings.isSunmiAutoCut());
         root.addView(chkSunmiAutoCut);
-        chkSunmiAutoDrawer = checkBox("自動開錢箱", settings.isSunmiAutoDrawer());
         root.addView(chkSunmiAutoDrawer);
-        chkSunmiBuzzer = checkBox("蜂鳴器提醒", settings.isSunmiBuzzer());
         root.addView(chkSunmiBuzzer);
         root.addView(label("列印角色："));
         spnSunmiRole = roleSpinner(settings.getSunmiRole());
         root.addView(spnSunmiRole);
 
         LinearLayout sunmiBtnRow = horizontal();
-
         Button btnSunmiStatus = button("查詢狀態");
         btnSunmiStatus.setOnClickListener(v -> {
             refreshSunmiStatus();
             if (!sunmiPrinter.isConnected()) {
-                toast("印表機未連線，嘗試重新綁定...");
+                toast("未連線，嘗試重新綁定...");
                 sunmiPrinter.bind();
                 handler.postDelayed(this::refreshSunmiStatus, 2000);
                 return;
             }
             int s = sunmiPrinter.getPrinterStatus();
-            toast("印表機狀態碼：" + s + " / " + statusText(s));
+            toast("狀態碼：" + s + " / " + statusText(s));
         });
         sunmiBtnRow.addView(btnSunmiStatus);
 
         Button btnSunmiTest = button("測試列印");
         btnSunmiTest.setOnClickListener(v -> {
-            if (!sunmiPrinter.isConnected()) {
-                toast("印表機未連線，請先查詢狀態");
-                return;
-            }
+            if (!sunmiPrinter.isConnected()) { toast("印表機未連線"); return; }
             boolean ok = sunmiPrinter.printTestReceipt();
-            toast(ok ? "測試列印已送出" : "測試列印失敗");
+            toast(ok ? "測試列印已送出" : "列印失敗");
         });
         sunmiBtnRow.addView(btnSunmiTest);
 
         Button btnSunmiCut = button("測試切紙");
         btnSunmiCut.setOnClickListener(v -> {
-            if (!sunmiPrinter.isConnected()) { toast("印表機未連線"); return; }
-            boolean ok = sunmiPrinter.cutPaper();
-            toast(ok ? "切紙成功" : "切紙失敗");
+            if (!sunmiPrinter.isConnected()) { toast("未連線"); return; }
+            toast(sunmiPrinter.cutPaper() ? "切紙成功" : "切紙失敗");
         });
         sunmiBtnRow.addView(btnSunmiCut);
 
         Button btnSunmiDrawer = button("測試錢箱");
         btnSunmiDrawer.setOnClickListener(v -> {
-            if (!sunmiPrinter.isConnected()) { toast("印表機未連線"); return; }
-            boolean ok = sunmiPrinter.openCashDrawer();
-            toast(ok ? "錢箱已開" : "開錢箱失敗");
+            if (!sunmiPrinter.isConnected()) { toast("未連線"); return; }
+            toast(sunmiPrinter.openCashDrawer() ? "錢箱已開" : "開錢箱失敗");
         });
         sunmiBtnRow.addView(btnSunmiDrawer);
-
-        Button btnSunmiBuzz = button("測試蜂鳴");
-        btnSunmiBuzz.setOnClickListener(v -> {
-            if (!sunmiPrinter.isConnected()) { toast("印表機未連線"); return; }
-            boolean ok = sunmiPrinter.buzzer();
-            toast(ok ? "蜂鳴成功" : "蜂鳴失敗");
-        });
-        sunmiBtnRow.addView(btnSunmiBuzz);
 
         root.addView(sunmiBtnRow);
         root.addView(divider());
 
         // ===== 藍牙印表機 =====
         root.addView(sectionTitle("藍牙印表機"));
-        chkBtEnabled = checkBox("啟用藍牙印表機", settings.isBtEnabled());
+        chkBtEnabled     = checkBox("啟用藍牙印表機", settings.isBtEnabled());
+        chkBtAutoConnect = checkBox("開機自動連線",   settings.isBtAutoConnect());
+        chkBtAutoCut     = checkBox("自動切紙",       settings.isBtAutoCut());
+        chkBtBuzzer      = checkBox("蜂鳴器提醒",     settings.isBtBuzzer());
         root.addView(chkBtEnabled);
-        chkBtAutoConnect = checkBox("開機自動連線", settings.isBtAutoConnect());
         root.addView(chkBtAutoConnect);
-        chkBtAutoCut = checkBox("自動切紙", settings.isBtAutoCut());
         root.addView(chkBtAutoCut);
-        chkBtBuzzer = checkBox("蜂鳴器提醒", settings.isBtBuzzer());
         root.addView(chkBtBuzzer);
         root.addView(label("列印角色："));
         spnBtRole = roleSpinner(settings.getBtRole());
         root.addView(spnBtRole);
-
         root.addView(label("選擇藍牙裝置："));
         spnBtDevice = new Spinner(this);
         spnBtDevice.setBackgroundColor(Color.parseColor("#F5F5F5"));
@@ -195,20 +241,15 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(spnBtDevice);
 
         LinearLayout btBtnRow = horizontal();
-
         Button btnBtRefresh = button("刷新裝置");
-        btnBtRefresh.setOnClickListener(v -> {
-            loadBtDevices();
-            toast("已刷新，共 " + btDeviceAddresses.size() + " 個裝置");
-        });
+        btnBtRefresh.setOnClickListener(v -> { loadBtDevices(); toast("共 " + btDeviceAddresses.size() + " 個裝置"); });
         btBtnRow.addView(btnBtRefresh);
 
         Button btnBtConnect = button("連線");
         btnBtConnect.setOnClickListener(v -> {
             int pos = spnBtDevice.getSelectedItemPosition();
             if (pos < 0 || pos >= btDeviceAddresses.size() || btDeviceAddresses.get(pos).isEmpty()) {
-                toast("請先選擇裝置");
-                return;
+                toast("請先選擇裝置"); return;
             }
             String addr = btDeviceAddresses.get(pos);
             toast("藍牙連線中...");
@@ -218,32 +259,25 @@ public class SettingsActivity extends AppCompatActivity {
                     if (ok) {
                         btChanged = true;
                         settings.setBtAddress(addr);
-                        String name = (String) spnBtDevice.getSelectedItem();
-                        settings.setBtName(name);
-                        toast("藍牙已連線：" + name);
-                    } else {
-                        toast("藍牙連線失敗");
-                    }
+                        settings.setBtName((String) spnBtDevice.getSelectedItem());
+                        toast("已連線：" + addr);
+                    } else { toast("連線失敗"); }
                 });
             }).start();
         });
         btBtnRow.addView(btnBtConnect);
 
         Button btnBtDisconnect = dangerButton("斷線");
-        btnBtDisconnect.setOnClickListener(v -> {
-            btPrinter.disconnect();
-            btChanged = true;
-            toast("藍牙已斷線");
-        });
+        btnBtDisconnect.setOnClickListener(v -> { btPrinter.disconnect(); btChanged = true; toast("藍牙已斷線"); });
         btBtnRow.addView(btnBtDisconnect);
 
         Button btnBtTest = button("測試列印");
         btnBtTest.setOnClickListener(v -> {
-            if (!btPrinter.isConnected()) { toast("藍牙未連線"); return; }
+            if (!btPrinter.isConnected()) { toast("未連線"); return; }
             new Thread(() -> {
                 boolean ok = btPrinter.printText("藍牙測試列印\n" +
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()) + "\n\n\n");
-                runOnUiThread(() -> toast(ok ? "藍牙測試列印已送出" : "藍牙測試列印失敗"));
+                runOnUiThread(() -> toast(ok ? "已送出" : "失敗"));
             }).start();
         });
         btBtnRow.addView(btnBtTest);
@@ -253,13 +287,13 @@ public class SettingsActivity extends AppCompatActivity {
 
         // ===== 網路印表機 =====
         root.addView(sectionTitle("網路印表機（WiFi / LAN）"));
-        chkNetEnabled = checkBox("啟用網路印表機", settings.isNetEnabled());
+        chkNetEnabled     = checkBox("啟用網路印表機", settings.isNetEnabled());
+        chkNetAutoConnect = checkBox("開機自動連線",   settings.isNetAutoConnect());
+        chkNetAutoCut     = checkBox("自動切紙",       settings.isNetAutoCut());
+        chkNetBuzzer      = checkBox("蜂鳴器提醒",     settings.isNetBuzzer());
         root.addView(chkNetEnabled);
-        chkNetAutoConnect = checkBox("開機自動連線", settings.isNetAutoConnect());
         root.addView(chkNetAutoConnect);
-        chkNetAutoCut = checkBox("自動切紙", settings.isNetAutoCut());
         root.addView(chkNetAutoCut);
-        chkNetBuzzer = checkBox("蜂鳴器提醒", settings.isNetBuzzer());
         root.addView(chkNetBuzzer);
         root.addView(label("列印角色："));
         spnNetRole = roleSpinner(settings.getNetRole());
@@ -267,14 +301,12 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(label("IP 位址："));
         edtNetIp = editText(settings.getNetIp(), InputType.TYPE_CLASS_TEXT);
         edtNetIp.setHint("例如 192.168.1.100");
-        edtNetIp.setHintTextColor(COLOR_HINT);
         root.addView(edtNetIp);
         root.addView(label("Port："));
         edtNetPort = editText(String.valueOf(settings.getNetPort()), InputType.TYPE_CLASS_NUMBER);
         root.addView(edtNetPort);
 
         LinearLayout netBtnRow = horizontal();
-
         Button btnNetConnect = button("連線");
         btnNetConnect.setOnClickListener(v -> {
             String ip = edtNetIp.getText().toString().trim();
@@ -282,39 +314,32 @@ public class SettingsActivity extends AppCompatActivity {
             try { port = Integer.parseInt(edtNetPort.getText().toString().trim()); }
             catch (Exception e) { port = 9100; }
             if (ip.isEmpty()) { toast("請輸入 IP"); return; }
-            toast("網路連線中...");
-            final int finalPort = port;
+            final int fp = port;
+            toast("連線中...");
             new Thread(() -> {
-                boolean ok = netPrinter.connect(ip, finalPort);
+                boolean ok = netPrinter.connect(ip, fp);
                 runOnUiThread(() -> {
                     if (ok) {
                         netChanged = true;
-                        settings.setNetIp(ip);
-                        settings.setNetPort(finalPort);
-                        toast("網路已連線：" + ip + ":" + finalPort);
-                    } else {
-                        toast("網路連線失敗");
-                    }
+                        settings.setNetIp(ip); settings.setNetPort(fp);
+                        toast("已連線：" + ip + ":" + fp);
+                    } else { toast("連線失敗"); }
                 });
             }).start();
         });
         netBtnRow.addView(btnNetConnect);
 
         Button btnNetDisconnect = dangerButton("斷線");
-        btnNetDisconnect.setOnClickListener(v -> {
-            netPrinter.disconnect();
-            netChanged = true;
-            toast("網路已斷線");
-        });
+        btnNetDisconnect.setOnClickListener(v -> { netPrinter.disconnect(); netChanged = true; toast("網路已斷線"); });
         netBtnRow.addView(btnNetDisconnect);
 
         Button btnNetTest = button("測試列印");
         btnNetTest.setOnClickListener(v -> {
-            if (!netPrinter.isConnected()) { toast("網路未連線"); return; }
+            if (!netPrinter.isConnected()) { toast("未連線"); return; }
             new Thread(() -> {
                 boolean ok = netPrinter.printText("網路測試列印\n" +
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()) + "\n\n\n");
-                runOnUiThread(() -> toast(ok ? "網路測試列印已送出" : "網路測試列印失敗"));
+                runOnUiThread(() -> toast(ok ? "已送出" : "失敗"));
             }).start();
         });
         netBtnRow.addView(btnNetTest);
@@ -327,7 +352,6 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(label("店名："));
         edtStoreName = editText(settings.getStoreName(), InputType.TYPE_CLASS_TEXT);
         edtStoreName.setHint("例如 我的餐廳");
-        edtStoreName.setHintTextColor(COLOR_HINT);
         root.addView(edtStoreName);
         root.addView(label("電話："));
         edtStorePhone = editText(settings.getStorePhone(), InputType.TYPE_CLASS_PHONE);
@@ -345,30 +369,28 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(divider());
 
         // ===== 儲存 / 取消 =====
-        LinearLayout btnRow = horizontal();
+        LinearLayout saveBtnRow = horizontal();
 
         Button btnSave = successButton("儲存設定");
         btnSave.setOnClickListener(v -> saveAll());
-        btnRow.addView(btnSave);
+        saveBtnRow.addView(btnSave);
 
         Button btnCancel = neutralButton("取消");
-        btnCancel.setOnClickListener(v -> {
-            setResult(RESULT_CANCELED);
-            finish();
-        });
-        btnRow.addView(btnCancel);
+        btnCancel.setOnClickListener(v -> { setResult(RESULT_CANCELED); finish(); });
+        saveBtnRow.addView(btnCancel);
 
         Button btnReset = dangerButton("恢復預設");
         btnReset.setOnClickListener(v -> {
             settings.resetAll();
-            toast("已恢復預設，請重新開啟設定頁面");
+            toast("已恢復預設，請重新開啟設定");
             setResult(RESULT_OK);
             finish();
         });
-        btnRow.addView(btnReset);
+        saveBtnRow.addView(btnReset);
 
-        root.addView(btnRow);
+        root.addView(saveBtnRow);
 
+        // 底部留白
         View spacer = new View(this);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(80)));
@@ -378,11 +400,70 @@ public class SettingsActivity extends AppCompatActivity {
         setContentView(scroll);
     }
 
+    // ==================== 儲存 ====================
+
+    private void saveAll() {
+        // HTTP 埠號
+        int newPort = settings.getHttpPort();
+        try { newPort = Integer.parseInt(edtHttpPort.getText().toString().trim()); }
+        catch (Exception e) { newPort = 8080; }
+        if (newPort != settings.getHttpPort()) portChanged = true;
+        settings.setHttpPort(newPort);
+
+        // 內建印表機
+        settings.setSunmiEnabled(chkSunmiEnabled.isChecked());
+        settings.setSunmiAutoCut(chkSunmiAutoCut.isChecked());
+        settings.setSunmiAutoDrawer(chkSunmiAutoDrawer.isChecked());
+        settings.setSunmiBuzzer(chkSunmiBuzzer.isChecked());
+        settings.setSunmiRole(getRoleValue(spnSunmiRole));
+
+        // 藍牙
+        settings.setBtEnabled(chkBtEnabled.isChecked());
+        settings.setBtAutoConnect(chkBtAutoConnect.isChecked());
+        settings.setBtAutoCut(chkBtAutoCut.isChecked());
+        settings.setBtBuzzer(chkBtBuzzer.isChecked());
+        settings.setBtRole(getRoleValue(spnBtRole));
+
+        // 網路
+        settings.setNetEnabled(chkNetEnabled.isChecked());
+        settings.setNetAutoConnect(chkNetAutoConnect.isChecked());
+        settings.setNetAutoCut(chkNetAutoCut.isChecked());
+        settings.setNetBuzzer(chkNetBuzzer.isChecked());
+        settings.setNetRole(getRoleValue(spnNetRole));
+        settings.setNetIp(edtNetIp.getText().toString().trim());
+        try { settings.setNetPort(Integer.parseInt(edtNetPort.getText().toString().trim())); }
+        catch (Exception e) { settings.setNetPort(9100); }
+
+        // 收據
+        settings.setStoreName(edtStoreName.getText().toString().trim());
+        settings.setStorePhone(edtStorePhone.getText().toString().trim());
+        settings.setStoreAddress(edtStoreAddress.getText().toString().trim());
+        settings.setReceiptFooter(edtReceiptFooter.getText().toString().trim());
+        try { settings.setPrintCopies(Integer.parseInt(edtPrintCopies.getText().toString().trim())); }
+        catch (Exception e) { settings.setPrintCopies(1); }
+
+        // 埠號改了 → 通知 Service 重啟 HTTP Server
+        if (portChanged && serviceBound && printService != null) {
+            printService.restartHttpServer();
+        }
+
+        Intent data = new Intent();
+        data.putExtra("bt_changed",   btChanged);
+        data.putExtra("net_changed",  netChanged);
+        data.putExtra("port_changed", portChanged);
+        setResult(RESULT_OK, data);
+        toast("設定已儲存");
+        finish();
+    }
+
+    // ==================== Sunmi 狀態 ====================
+
     private void refreshSunmiStatus() {
         if (sunmiPrinter.isConnected()) {
             int s = sunmiPrinter.getPrinterStatus();
             tvSunmiStatus.setText("印表機狀態：" + statusText(s));
-            tvSunmiStatus.setTextColor(s == 1 ? Color.parseColor("#4CAF50") : Color.parseColor("#F44336"));
+            tvSunmiStatus.setTextColor(s == 1
+                    ? Color.parseColor("#4CAF50") : Color.parseColor("#F44336"));
         } else {
             tvSunmiStatus.setText("印表機狀態：未連線（綁定中...）");
             tvSunmiStatus.setTextColor(COLOR_HINT);
@@ -391,115 +472,49 @@ public class SettingsActivity extends AppCompatActivity {
 
     private String statusText(int s) {
         switch (s) {
-            case 1: return "正常";
-            case 2: return "準備中";
-            case 3: return "通訊異常";
-            case 4: return "缺紙";
-            case 5: return "過熱";
-            case 6: return "開蓋";
-            case 7: return "切刀異常";
+            case 1:   return "正常";
+            case 2:   return "準備中";
+            case 3:   return "通訊異常";
+            case 4:   return "缺紙";
+            case 5:   return "過熱";
+            case 6:   return "開蓋";
+            case 7:   return "切刀異常";
             case 505: return "未連線";
-            default: return "未知(" + s + ")";
+            default:  return "未知(" + s + ")";
         }
     }
 
-    private void saveAll() {
-        String url = edtUrl.getText().toString().trim();
-        if (url.isEmpty()) url = settings.getDefaultUrl();
-        settings.setUrl(url);
-
-        settings.setSunmiEnabled(chkSunmiEnabled.isChecked());
-        settings.setSunmiAutoCut(chkSunmiAutoCut.isChecked());
-        settings.setSunmiAutoDrawer(chkSunmiAutoDrawer.isChecked());
-        settings.setSunmiBuzzer(chkSunmiBuzzer.isChecked());
-        settings.setSunmiRole(getRoleValue(spnSunmiRole));
-
-        settings.setBtEnabled(chkBtEnabled.isChecked());
-        settings.setBtAutoConnect(chkBtAutoConnect.isChecked());
-        settings.setBtAutoCut(chkBtAutoCut.isChecked());
-        settings.setBtBuzzer(chkBtBuzzer.isChecked());
-        settings.setBtRole(getRoleValue(spnBtRole));
-
-        settings.setNetEnabled(chkNetEnabled.isChecked());
-        settings.setNetAutoConnect(chkNetAutoConnect.isChecked());
-        settings.setNetAutoCut(chkNetAutoCut.isChecked());
-        settings.setNetBuzzer(chkNetBuzzer.isChecked());
-        settings.setNetRole(getRoleValue(spnNetRole));
-        settings.setNetIp(edtNetIp.getText().toString().trim());
-        try {
-            settings.setNetPort(Integer.parseInt(edtNetPort.getText().toString().trim()));
-        } catch (Exception e) {
-            settings.setNetPort(9100);
-        }
-
-        settings.setStoreName(edtStoreName.getText().toString().trim());
-        settings.setStorePhone(edtStorePhone.getText().toString().trim());
-        settings.setStoreAddress(edtStoreAddress.getText().toString().trim());
-        settings.setReceiptFooter(edtReceiptFooter.getText().toString().trim());
-        try {
-            settings.setPrintCopies(Integer.parseInt(edtPrintCopies.getText().toString().trim()));
-        } catch (Exception e) {
-            settings.setPrintCopies(1);
-        }
-
-        Intent data = new Intent();
-        data.putExtra("bt_changed", btChanged);
-        data.putExtra("net_changed", netChanged);
-        setResult(RESULT_OK, data);
-
-        toast("設定已儲存");
-        finish();
-    }
+    // ==================== 藍牙裝置 ====================
 
     private void loadBtDevices() {
         List<String> names = new ArrayList<>();
         btDeviceAddresses.clear();
-
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter != null) {
             try {
                 Set<BluetoothDevice> devices = adapter.getBondedDevices();
                 if (devices != null) {
                     String savedAddr = settings.getBtAddress();
-                    int selectedIdx = 0;
-                    int idx = 0;
+                    int selectedIdx = 0, idx = 0;
                     for (BluetoothDevice d : devices) {
-                        String name = (d.getName() != null ? d.getName() : "Unknown") + " [" + d.getAddress() + "]";
+                        String name = (d.getName() != null ? d.getName() : "Unknown")
+                                + " [" + d.getAddress() + "]";
                         names.add(name);
                         btDeviceAddresses.add(d.getAddress());
                         if (d.getAddress().equals(savedAddr)) selectedIdx = idx;
                         idx++;
                     }
-                    ArrayAdapter<String> ad = new ArrayAdapter<String>(this,
-                            android.R.layout.simple_spinner_item, names) {
-                        @Override
-                        public View getView(int position, View convertView, ViewGroup parent) {
-                            TextView tv = (TextView) super.getView(position, convertView, parent);
-                            tv.setTextColor(COLOR_TEXT);
-                            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-                            tv.setPadding(dp(8), dp(10), dp(8), dp(10));
-                            return tv;
-                        }
-                        @Override
-                        public View getDropDownView(int position, View convertView, ViewGroup parent) {
-                            TextView tv = (TextView) super.getDropDownView(position, convertView, parent);
-                            tv.setTextColor(COLOR_TEXT);
-                            tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-                            tv.setPadding(dp(12), dp(14), dp(12), dp(14));
-                            tv.setBackgroundColor(Color.WHITE);
-                            return tv;
-                        }
-                    };
+                    ArrayAdapter<String> ad = new ArrayAdapter<>(this,
+                            android.R.layout.simple_spinner_item, names);
                     ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
                     spnBtDevice.setAdapter(ad);
                     if (!names.isEmpty()) spnBtDevice.setSelection(selectedIdx);
                 }
             } catch (SecurityException e) {
-                Log.e(TAG, "Bluetooth permission error", e);
+                Log.e(TAG, "BT permission error", e);
                 toast("需要藍牙權限");
             }
         }
-
         if (names.isEmpty()) {
             names.add("無已配對裝置");
             btDeviceAddresses.add("");
@@ -541,8 +556,7 @@ public class SettingsActivity extends AppCompatActivity {
         et.setBackgroundColor(Color.parseColor("#F5F5F5"));
         et.setPadding(dp(10), dp(10), dp(10), dp(10));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, dp(2), 0, dp(4));
         et.setLayoutParams(lp);
         return et;
@@ -566,8 +580,7 @@ public class SettingsActivity extends AppCompatActivity {
         btn.setTextColor(Color.WHITE);
         btn.setBackgroundColor(Color.parseColor("#1976D2"));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(dp(4), dp(4), dp(4), dp(4));
         btn.setLayoutParams(lp);
         btn.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -577,14 +590,16 @@ public class SettingsActivity extends AppCompatActivity {
     private Button dangerButton(String text) {
         Button btn = button(text);
         btn.setBackgroundColor(Color.parseColor("#F44336"));
-        btn.setTextColor(Color.WHITE);
         return btn;
     }
 
     private Button successButton(String text) {
         Button btn = button(text);
         btn.setBackgroundColor(Color.parseColor("#4CAF50"));
-        btn.setTextColor(Color.WHITE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp.setMargins(dp(4), dp(4), dp(4), dp(4));
+        btn.setLayoutParams(lp);
         return btn;
     }
 
@@ -592,40 +607,24 @@ public class SettingsActivity extends AppCompatActivity {
         Button btn = button(text);
         btn.setBackgroundColor(Color.parseColor("#E0E0E0"));
         btn.setTextColor(COLOR_TEXT);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp.setMargins(dp(4), dp(4), dp(4), dp(4));
+        btn.setLayoutParams(lp);
         return btn;
     }
 
     private Spinner roleSpinner(String currentRole) {
         Spinner spn = new Spinner(this);
         spn.setBackgroundColor(Color.parseColor("#F5F5F5"));
-        String[] roles = {"customer", "kitchen", "both"};
+        String[] roles  = {"customer", "kitchen", "both"};
         String[] labels = {"顧客單", "廚房單", "兩者都印"};
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_item, labels) {
-            @Override
-            public View getView(int position, View convertView, ViewGroup parent) {
-                TextView tv = (TextView) super.getView(position, convertView, parent);
-                tv.setTextColor(COLOR_TEXT);
-                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-                return tv;
-            }
-            @Override
-            public View getDropDownView(int position, View convertView, ViewGroup parent) {
-                TextView tv = (TextView) super.getDropDownView(position, convertView, parent);
-                tv.setTextColor(COLOR_TEXT);
-                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-                tv.setPadding(dp(12), dp(14), dp(12), dp(14));
-                tv.setBackgroundColor(Color.WHITE);
-                return tv;
-            }
-        };
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, labels);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spn.setAdapter(adapter);
         for (int i = 0; i < roles.length; i++) {
-            if (roles[i].equals(currentRole)) {
-                spn.setSelection(i);
-                break;
-            }
+            if (roles[i].equals(currentRole)) { spn.setSelection(i); break; }
         }
         return spn;
     }
@@ -633,8 +632,7 @@ public class SettingsActivity extends AppCompatActivity {
     private String getRoleValue(Spinner spn) {
         String[] roles = {"customer", "kitchen", "both"};
         int pos = spn.getSelectedItemPosition();
-        if (pos >= 0 && pos < roles.length) return roles[pos];
-        return "customer";
+        return (pos >= 0 && pos < roles.length) ? roles[pos] : "customer";
     }
 
     private LinearLayout horizontal() {
@@ -642,8 +640,7 @@ public class SettingsActivity extends AppCompatActivity {
         ll.setOrientation(LinearLayout.HORIZONTAL);
         ll.setGravity(Gravity.CENTER_VERTICAL);
         ll.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         ll.setPadding(0, dp(6), 0, dp(6));
         return ll;
     }
@@ -665,11 +662,5 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (sunmiPrinter != null) sunmiPrinter.unbind();
     }
 }

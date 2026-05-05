@@ -7,9 +7,9 @@ public class AppSettings {
 
     private static final String PREF_NAME = "pos_printer_settings";
 
-    // 网址
-    private static final String KEY_URL = "pos_url";
-    private static final String DEFAULT_URL = "https://jess0937588151-hue.github.io/2234/";
+    // HTTP Server 埠號
+    private static final String KEY_HTTP_PORT = "http_port";
+    private static final int    DEFAULT_HTTP_PORT = 8080;
 
     // 内建印表机
     private static final String KEY_SUNMI_ENABLED = "sunmi_enabled";
@@ -49,18 +49,15 @@ public class AppSettings {
         prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
     }
 
-    // ==================== 网址 ====================
+    // ==================== HTTP Server 埠號 ====================
 
-    public String getUrl() {
-        return prefs.getString(KEY_URL, DEFAULT_URL);
+    public int getHttpPort() {
+        return prefs.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT);
     }
 
-    public void setUrl(String url) {
-        prefs.edit().putString(KEY_URL, url).apply();
-    }
-
-    public String getDefaultUrl() {
-        return DEFAULT_URL;
+    public void setHttpPort(int port) {
+        if (port < 1024 || port > 65535) port = DEFAULT_HTTP_PORT;
+        prefs.edit().putInt(KEY_HTTP_PORT, port).apply();
     }
 
     // ==================== 内建印表机 ====================
@@ -263,11 +260,11 @@ public class AppSettings {
         prefs.edit().putInt(KEY_PRINT_COPIES, v).apply();
     }
 
-    // ==================== 汇出全部设定（给JS用）====================
+    // ==================== 汇出全部设定 ====================
 
     public String toJson() {
         StringBuilder sb = new StringBuilder("{");
-        sb.append("\"url\":\"").append(escape(getUrl())).append("\",");
+        sb.append("\"httpPort\":").append(getHttpPort()).append(",");
         sb.append("\"sunmiEnabled\":").append(isSunmiEnabled()).append(",");
         sb.append("\"sunmiAutoCut\":").append(isSunmiAutoCut()).append(",");
         sb.append("\"sunmiAutoDrawer\":").append(isSunmiAutoDrawer()).append(",");
@@ -299,7 +296,7 @@ public class AppSettings {
     public void fromJson(String jsonStr) {
         try {
             org.json.JSONObject j = new org.json.JSONObject(jsonStr);
-            if (j.has("url")) setUrl(j.getString("url"));
+            if (j.has("httpPort")) setHttpPort(j.getInt("httpPort"));
             if (j.has("sunmiEnabled")) setSunmiEnabled(j.getBoolean("sunmiEnabled"));
             if (j.has("sunmiAutoCut")) setSunmiAutoCut(j.getBoolean("sunmiAutoCut"));
             if (j.has("sunmiAutoDrawer")) setSunmiAutoDrawer(j.getBoolean("sunmiAutoDrawer"));
