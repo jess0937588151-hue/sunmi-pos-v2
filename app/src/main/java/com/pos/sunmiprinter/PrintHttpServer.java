@@ -54,7 +54,7 @@ public class PrintHttpServer extends NanoHTTPD {
 
         // 統一加 CORS header（OPTIONS preflight 直接回 200）
         if (method == Method.OPTIONS) {
-            return corsOk(newFixedLengthResponse(""));
+            return corsOk("");
         }
 
         try {
