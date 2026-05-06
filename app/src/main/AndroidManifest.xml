@@ -50,9 +50,11 @@
 
         <!-- 後台列印服務（Foreground Service）-->
         <service
-            android:name=".PrintService"
-            android:exported="false"
-            android:stopWithTask="false" />
+    android:name=".PrintService"
+    android:exported="false"
+    android:foregroundServiceType="dataSync"
+    android:stopWithTask="false" />
+
 
         <!-- 開機自動啟動 Receiver -->
         <receiver
