@@ -52,7 +52,6 @@
         <service
     android:name=".PrintService"
     android:exported="false"
-    android:foregroundServiceType="dataSync"
     android:stopWithTask="false" />
 
 
