@@ -58,7 +58,9 @@ public class PrintService extends Service {
     public void onCreate() {
         super.onCreate();
         LogManager.init(this);
+        PrintQueue.init();
         Log.d(TAG, "onCreate");
+
 
         handler = new Handler(Looper.getMainLooper());
         settings = new AppSettings(this);
@@ -105,15 +107,18 @@ public class PrintService extends Service {
         return binder;
     }
 
-    @Override
+           @Override
     public void onDestroy() {
         Log.d(TAG, "onDestroy");
         stopHttpServer();
         if (sunmiPrinter != null) sunmiPrinter.unbind();
         if (btPrinter != null) btPrinter.disconnect();
         if (netPrinter != null) netPrinter.disconnect();
+        PrintQueue.shutdown();
         super.onDestroy();
     }
+
+
 
     // ==================== HTTP Server ====================
 
