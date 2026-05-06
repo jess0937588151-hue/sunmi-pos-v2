@@ -52,6 +52,8 @@ public class PrintService extends Service {
 
     private boolean serverRunning = false;
 
+    LogManager.init(this);
+
     // ==================== 生命週期 ====================
 
     @Override
