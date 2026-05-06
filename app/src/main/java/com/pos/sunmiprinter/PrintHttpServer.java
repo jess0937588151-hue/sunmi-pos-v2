@@ -1,386 +1,384 @@
 package com.pos.sunmiprinter;
 
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.util.Base64;
-import android.util.Log;
+import android.content.Context;
 
 import com.pos.sunmiprinter.printer.BluetoothPrinterManager;
 import com.pos.sunmiprinter.printer.NetworkPrinterManager;
 import com.pos.sunmiprinter.printer.SunmiPrinterManager;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import fi.iki.elonen.NanoHTTPD;
 
 /**
- * 內建 HTTP Server（NanoHTTPD）
- * 監聽 127.0.0.1:port，提供列印 REST API
- * 所有回應加 CORS header，允許本機網頁 fetch 呼叫
+ * 本機 HTTP Server（NanoHTTPD），綁定 127.0.0.1
+ * v20260603:
+ *   - /ping 增加 paperOut/coverOpen/overheat/lastPrintAt/lastPrintOk/apkVersion
+ *   - 新增 GET /logs?date=YYYY-MM-DD&lines=200&token=xxx (或 X-API-Token header)
+ *   - 新增 GET /test  → 回傳測試列印 HTML 頁
+ *   - /print/* 與 /drawer/open 需要 X-API-Token 驗證 (token 為空字串時不檢查，向後相容)
+ *   - 所有錯誤透過 LogManager.e 紀錄
+ *   - 維持綁定 127.0.0.1（loopback），外部裝置無法連入
  */
 public class PrintHttpServer extends NanoHTTPD {
 
     private static final String TAG = "PrintHttpServer";
-    private static final String VERSION = "5.0";
 
+    private final Context context;
+    private final AppSettings settings;
     private final SunmiPrinterManager sunmi;
-    private final BluetoothPrinterManager bt;
-    private final NetworkPrinterManager net;
+    private final BluetoothPrinterManager bluetooth;
+    private final NetworkPrinterManager network;
 
-    public PrintHttpServer(int port,
+    public PrintHttpServer(Context ctx,
+                           int port,
                            SunmiPrinterManager sunmi,
-                           BluetoothPrinterManager bt,
-                           NetworkPrinterManager net) {
-        // 只綁 127.0.0.1，不對外開放
+                           BluetoothPrinterManager bluetooth,
+                           NetworkPrinterManager network) {
         super("127.0.0.1", port);
+        this.context = ctx.getApplicationContext();
+        this.settings = new AppSettings(this.context);
         this.sunmi = sunmi;
-        this.bt = bt;
-        this.net = net;
+        this.bluetooth = bluetooth;
+        this.network = network;
     }
-
-    // ==================== 路由分派 ====================
 
     @Override
     public Response serve(IHTTPSession session) {
-        String uri = session.getUri();
         Method method = session.getMethod();
+        String uri = session.getUri();
 
-        Log.d(TAG, method + " " + uri);
-
-        // 統一加 CORS header（OPTIONS preflight 直接回 200）
-        if (method == Method.OPTIONS) {
-            return corsOk("");
+        // CORS preflight
+        if (Method.OPTIONS.equals(method)) {
+            return cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""));
         }
 
         try {
-            // GET /ping
-            if (method == Method.GET && uri.equals("/ping")) {
-                return corsOk(jsonOk(new JSONObject()
-                        .put("version", VERSION)
-                        .put("sunmi", sunmi.isConnected())
-                        .put("bluetooth", bt.isConnected())
-                        .put("network", net.isConnected())));
+            // ----- 不需 token 的端點 -----
+            if (Method.GET.equals(method) && "/ping".equals(uri)) {
+                return handlePing();
             }
-
-            // GET /printer/status
-            if (method == Method.GET && uri.equals("/printer/status")) {
+            if (Method.GET.equals(method) && "/printer/status".equals(uri)) {
                 return handleStatus();
             }
-
-            // POST 端點需要讀 body
-            if (method == Method.POST) {
-                String body = readBody(session);
-                JSONObject json = body.isEmpty() ? new JSONObject() : new JSONObject(body);
-
-                switch (uri) {
-                    case "/print/sunmi":
-                        return handlePrintSunmi(json);
-                    case "/print/bluetooth":
-                        return handlePrintBluetooth(json);
-                    case "/print/network":
-                        return handlePrintNetwork(json);
-                    case "/drawer/open":
-                        return handleDrawerOpen(json);
-                    default:
-                        break;
-                }
+            if (Method.GET.equals(method) && "/test".equals(uri)) {
+                return handleTestPage();
             }
 
-            return corsOk(jsonError("not found: " + uri), Response.Status.NOT_FOUND);
+            // ----- 以下端點需驗證 token -----
+            if (!checkToken(session)) {
+                LogManager.w(TAG, "unauthorized: " + method + " " + uri);
+                return cors(json(false, null, "unauthorized"));
+            }
 
-        } catch (Exception e) {
-            Log.e(TAG, "serve error: " + uri, e);
-            return corsOk(jsonError(e.getMessage()), Response.Status.INTERNAL_ERROR);
+            if (Method.GET.equals(method) && "/logs".equals(uri)) {
+                return handleLogs(session);
+            }
+            if (Method.POST.equals(method) && "/print/sunmi".equals(uri)) {
+                return handlePrintSunmi(session);
+            }
+            if (Method.POST.equals(method) && "/print/bluetooth".equals(uri)) {
+                return handlePrintBluetooth(session);
+            }
+            if (Method.POST.equals(method) && "/print/network".equals(uri)) {
+                return handlePrintNetwork(session);
+            }
+            if (Method.POST.equals(method) && "/drawer/open".equals(uri)) {
+                return handleDrawerOpen(session);
+            }
+
+            return cors(json(false, null, "not found: " + uri));
+        } catch (Throwable t) {
+            LogManager.e(TAG, "serve error: " + uri, t);
+            return cors(json(false, null, "server error: " + t.getMessage()));
         }
     }
 
-    // ==================== 各端點處理 ====================
+    // ===== Token check =====
+    private boolean checkToken(IHTTPSession session) {
+        String expected = settings.getApiToken();
+        if (expected == null || expected.isEmpty()) {
+            return true; // 向後相容：未設定 token 時不檢查
+        }
+        Map<String, String> headers = session.getHeaders();
+        String got = headers.get("x-api-token");
+        if (got == null) got = headers.get("X-API-Token");
+        if (got != null && expected.equals(got)) return true;
 
-    /** GET /printer/status */
-    private Response handleStatus() throws Exception {
-        JSONObject data = new JSONObject();
-        data.put("sunmi_connected", sunmi.isConnected());
-        data.put("sunmi_status", sunmi.getPrinterStatus());
-        data.put("bluetooth_connected", bt.isConnected());
-        data.put("bluetooth_address", bt.getConnectedAddress());
-        data.put("network_connected", net.isConnected());
-        data.put("network_info", net.getConnectedInfo());
-        return corsOk(jsonOk(data));
+        // 也允許 query string token=xxx（給 /logs 等 GET 用）
+        Map<String, List<String>> params = session.getParameters();
+        if (params != null) {
+            List<String> qs = params.get("token");
+            if (qs != null && !qs.isEmpty() && expected.equals(qs.get(0))) return true;
+        }
+        return false;
     }
 
-    /**
-     * POST /print/sunmi
-     * body: {
-     *   "type": "receipt" | "kitchen" | "text" | "raw",  // 預設 "receipt"
-     *   "payload": { ... }   // buildBridgePayload 產生的完整 JSON
-     *   -- 或舊式簡單格式 --
-     *   "text": "...",
-     *   "fontSize": 24,
-     *   "cut": true,
-     *   "openDrawer": false
-     * }
-     */
-    private Response handlePrintSunmi(JSONObject json) throws Exception {
-        if (!sunmi.isConnected()) {
-            return corsOk(jsonError("Sunmi printer not connected"));
-        }
+    // ===== /ping =====
+    private Response handlePing() {
+        StringBuilder data = new StringBuilder();
+        data.append("{");
+        data.append("\"version\":\"").append(getApkVersion()).append("\",");
+        data.append("\"server\":\"127.0.0.1:").append(settings.getHttpPort()).append("\",");
 
-        // 支援新式 payload 格式（來自 print-service.js buildBridgePayload）
-        if (json.has("payload")) {
-            JSONObject payload = json.getJSONObject("payload");
-            boolean ok = sunmi.printPosReceipt(payload.toString());
-            return corsOk(ok ? jsonOk(null) : jsonError("Sunmi print failed"));
-        }
+        SunmiPrinterManager.PrinterStatusInfo info = sunmi != null
+                ? sunmi.getPrinterStatusInfo()
+                : new SunmiPrinterManager.PrinterStatusInfo();
+        data.append("\"sunmiConnected\":").append(info.connected).append(",");
+        data.append("\"paperOut\":").append(info.paperOut).append(",");
+        data.append("\"coverOpen\":").append(info.coverOpen).append(",");
+        data.append("\"overheat\":").append(info.overheat).append(",");
+        data.append("\"cutterError\":").append(info.cutterError).append(",");
+        data.append("\"sunmiRaw\":").append(info.raw).append(",");
 
-        // 直接傳 buildBridgePayload 的內容（payload 就是 root）
-        if (json.has("shopName") || json.has("items") || json.has("orderNumber")) {
-            boolean ok = sunmi.printPosReceipt(json.toString());
-            if (json.optBoolean("openDrawer", false)) sunmi.openCashDrawer();
-            return corsOk(ok ? jsonOk(null) : jsonError("Sunmi print failed"));
-        }
+        boolean btConn = bluetooth != null && bluetooth.isConnected();
+        boolean netConn = network != null && network.isConnected();
+        data.append("\"bluetoothConnected\":").append(btConn).append(",");
+        data.append("\"networkConnected\":").append(netConn).append(",");
 
-        // 簡單文字列印
-        String text = json.optString("text", "");
-        if (!text.isEmpty()) {
-            float fontSize = (float) json.optDouble("fontSize", 24);
-            boolean ok = sunmi.printTextWithFont(text, "", fontSize);
-            if (json.optBoolean("cut", true)) sunmi.cutPaper();
-            if (json.optBoolean("openDrawer", false)) sunmi.openCashDrawer();
-            return corsOk(ok ? jsonOk(null) : jsonError("Sunmi print failed"));
-        }
-
-        // base64 raw data
-        String rawBase64 = json.optString("rawBase64", "");
-        if (!rawBase64.isEmpty()) {
-            byte[] data = Base64.decode(rawBase64, Base64.DEFAULT);
-            boolean ok = sunmi.sendRawData(data);
-            return corsOk(ok ? jsonOk(null) : jsonError("Sunmi raw send failed"));
-        }
-
-        // base64 bitmap
-        String bitmapBase64 = json.optString("bitmapBase64", "");
-        if (!bitmapBase64.isEmpty()) {
-            byte[] bytes = Base64.decode(bitmapBase64, Base64.DEFAULT);
-            Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-            if (bmp == null) return corsOk(jsonError("Invalid bitmap"));
-            boolean ok = sunmi.printBitmap(bmp);
-            return corsOk(ok ? jsonOk(null) : jsonError("Sunmi bitmap print failed"));
-        }
-
-        return corsOk(jsonError("No printable content in request body"));
+        data.append("\"lastPrintAt\":").append(settings.getLastPrintAt()).append(",");
+        data.append("\"lastPrintOk\":").append(settings.getLastPrintOk()).append(",");
+        data.append("\"lastPrintError\":\"").append(escape(settings.getLastPrintError())).append("\",");
+        data.append("\"now\":").append(System.currentTimeMillis());
+        data.append("}");
+        return cors(json(true, data.toString(), null));
     }
 
-    /**
-     * POST /print/bluetooth
-     * body: {
-     *   "payload": { ... }   // buildBridgePayload 產生的完整 JSON
-     *   -- 或 --
-     *   "text": "...",
-     *   "address": "AA:BB:CC:DD:EE:FF"  // 選填，若已連線則不需要
-     * }
-     */
-    private Response handlePrintBluetooth(JSONObject json) throws Exception {
-        // 若指定 address 且未連線，先連線
-        String address = json.optString("address", "");
-        if (!address.isEmpty() && !bt.isConnected()) {
-            boolean connected = bt.connect(address);
-            if (!connected) {
-                return corsOk(jsonError("Bluetooth connect failed: " + address));
+    // ===== /printer/status =====
+    private Response handleStatus() {
+        StringBuilder data = new StringBuilder();
+        data.append("{");
+        SunmiPrinterManager.PrinterStatusInfo info = sunmi != null
+                ? sunmi.getPrinterStatusInfo()
+                : new SunmiPrinterManager.PrinterStatusInfo();
+        data.append("\"sunmi\":").append(info.toJson()).append(",");
+        data.append("\"bluetooth\":{\"connected\":")
+                .append(bluetooth != null && bluetooth.isConnected())
+                .append(",\"address\":\"").append(escape(settings.getBtAddress())).append("\"},");
+        data.append("\"network\":{\"connected\":")
+                .append(network != null && network.isConnected())
+                .append(",\"ip\":\"").append(escape(settings.getNetIp()))
+                .append("\",\"port\":").append(settings.getNetPort()).append("}");
+        data.append("}");
+        return cors(json(true, data.toString(), null));
+    }
+
+    // ===== /logs =====
+    private Response handleLogs(IHTTPSession session) {
+        Map<String, List<String>> params = session.getParameters();
+        String date = "";
+        int lines = 200;
+        if (params != null) {
+            if (params.get("date") != null && !params.get("date").isEmpty()) {
+                date = params.get("date").get(0);
+            }
+            if (params.get("lines") != null && !params.get("lines").isEmpty()) {
+                try { lines = Integer.parseInt(params.get("lines").get(0)); } catch (Exception ignored) {}
             }
         }
-
-        if (!bt.isConnected()) {
-            return corsOk(jsonError("Bluetooth printer not connected"));
-        }
-
-        // 新式 payload
-        if (json.has("payload")) {
-            JSONObject payload = json.getJSONObject("payload");
-            String mode = payload.optString("mode", "receipt");
-            boolean ok = "kitchen".equals(mode)
-                    ? bt.printKitchenReceipt(payload.toString())
-                    : bt.printPosReceipt(payload.toString());
-            return corsOk(ok ? jsonOk(null) : jsonError("Bluetooth print failed"));
-        }
-
-        // buildBridgePayload root
-        if (json.has("shopName") || json.has("items") || json.has("orderNumber")) {
-            String mode = json.optString("mode", "receipt");
-            boolean ok = "kitchen".equals(mode)
-                    ? bt.printKitchenReceipt(json.toString())
-                    : bt.printPosReceipt(json.toString());
-            if (json.optBoolean("openDrawer", false)) bt.openCashDrawer();
-            return corsOk(ok ? jsonOk(null) : jsonError("Bluetooth print failed"));
-        }
-
-        // 簡單文字
-        String text = json.optString("text", "");
-        if (!text.isEmpty()) {
-            boolean ok = bt.printText(text);
-            if (json.optBoolean("cut", true)) bt.cutPaper();
-            if (json.optBoolean("openDrawer", false)) bt.openCashDrawer();
-            return corsOk(ok ? jsonOk(null) : jsonError("Bluetooth print failed"));
-        }
-
-        // raw
-        String rawBase64 = json.optString("rawBase64", "");
-        if (!rawBase64.isEmpty()) {
-            byte[] data = Base64.decode(rawBase64, Base64.DEFAULT);
-            boolean ok = bt.sendRawData(data);
-            return corsOk(ok ? jsonOk(null) : jsonError("Bluetooth raw send failed"));
-        }
-
-        return corsOk(jsonError("No printable content in request body"));
-    }
-
-    /**
-     * POST /print/network
-     * body: {
-     *   "payload": { ... }
-     *   -- 或 --
-     *   "text": "...",
-     *   "ip": "192.168.1.100",   // 選填，若已連線則不需要
-     *   "port": 9100
-     * }
-     */
-    private Response handlePrintNetwork(JSONObject json) throws Exception {
-        // 若指定 ip 且未連線，先連線
-        String ip = json.optString("ip", "");
-        if (!ip.isEmpty() && !net.isConnected()) {
-            int port = json.optInt("port", 9100);
-            boolean connected = net.connect(ip, port);
-            if (!connected) {
-                return corsOk(jsonError("Network connect failed: " + ip + ":" + port));
-            }
-        }
-
-        if (!net.isConnected()) {
-            return corsOk(jsonError("Network printer not connected"));
-        }
-
-        // 新式 payload
-        if (json.has("payload")) {
-            JSONObject payload = json.getJSONObject("payload");
-            String mode = payload.optString("mode", "receipt");
-            boolean ok = "kitchen".equals(mode)
-                    ? net.printKitchenReceipt(payload.toString())
-                    : net.printPosReceipt(payload.toString());
-            return corsOk(ok ? jsonOk(null) : jsonError("Network print failed"));
-        }
-
-        // buildBridgePayload root
-        if (json.has("shopName") || json.has("items") || json.has("orderNumber")) {
-            String mode = json.optString("mode", "receipt");
-            boolean ok = "kitchen".equals(mode)
-                    ? net.printKitchenReceipt(json.toString())
-                    : net.printPosReceipt(json.toString());
-            if (json.optBoolean("openDrawer", false)) net.openCashDrawer();
-            return corsOk(ok ? jsonOk(null) : jsonError("Network print failed"));
-        }
-
-        // 簡單文字
-        String text = json.optString("text", "");
-        if (!text.isEmpty()) {
-            boolean ok = net.printText(text);
-            if (json.optBoolean("cut", true)) net.cutPaper();
-            if (json.optBoolean("openDrawer", false)) net.openCashDrawer();
-            return corsOk(ok ? jsonOk(null) : jsonError("Network print failed"));
-        }
-
-        // raw
-        String rawBase64 = json.optString("rawBase64", "");
-        if (!rawBase64.isEmpty()) {
-            byte[] data = Base64.decode(rawBase64, Base64.DEFAULT);
-            boolean ok = net.sendRawData(data);
-            return corsOk(ok ? jsonOk(null) : jsonError("Network raw send failed"));
-        }
-
-        return corsOk(jsonError("No printable content in request body"));
-    }
-
-    /**
-     * POST /drawer/open
-     * 依優先順序：Sunmi > 藍牙 > 網路
-     */
-    private Response handleDrawerOpen(JSONObject json) throws Exception {
-        boolean ok = false;
-        String via = "";
-
-        if (sunmi.isConnected()) {
-            ok = sunmi.openCashDrawer();
-            via = "sunmi";
-        } else if (bt.isConnected()) {
-            ok = bt.openCashDrawer();
-            via = "bluetooth";
-        } else if (net.isConnected()) {
-            ok = net.openCashDrawer();
-            via = "network";
+        List<String> rows;
+        if (date == null || date.isEmpty()) {
+            rows = LogManager.getRecent(lines);
         } else {
-            return corsOk(jsonError("No printer connected for drawer open"));
+            rows = LogManager.readFile(date, lines);
         }
+        StringBuilder data = new StringBuilder();
+        data.append("{");
+        data.append("\"date\":\"").append(escape(date)).append("\",");
+        data.append("\"count\":").append(rows.size()).append(",");
+        data.append("\"logDir\":\"").append(escape(LogManager.getLogDirPath())).append("\",");
+        data.append("\"lines\":[");
+        for (int i = 0; i < rows.size(); i++) {
+            if (i > 0) data.append(",");
+            data.append("\"").append(escape(rows.get(i))).append("\"");
+        }
+        data.append("]}");
+        return cors(json(true, data.toString(), null));
+    }
 
-        if (ok) {
-            return corsOk(jsonOk(new JSONObject().put("via", via)));
+    // ===== /test (簡單測試頁) =====
+    private Response handleTestPage() {
+        String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                + "<title>POS 列印橋接測試</title>"
+                + "<style>body{font-family:sans-serif;padding:20px;font-size:16px}"
+                + "button{padding:12px 18px;margin:6px;font-size:16px}"
+                + "pre{background:#f4f4f4;padding:10px;white-space:pre-wrap;word-break:break-all}</style>"
+                + "</head><body>"
+                + "<h2>POS 列印橋接測試</h2>"
+                + "<p>APK 版本: <b>" + getApkVersion() + "</b></p>"
+                + "<p>API Token: <code>" + escape(settings.getApiToken()) + "</code></p>"
+                + "<button onclick=\"call('/ping','GET')\">Ping</button>"
+                + "<button onclick=\"call('/printer/status','GET')\">印表機狀態</button>"
+                + "<button onclick=\"testPrint()\">測試列印</button>"
+                + "<button onclick=\"openDrawer()\">開錢箱</button>"
+                + "<button onclick=\"call('/logs?lines=50','GET')\">最近日誌</button>"
+                + "<pre id='out'>(尚未呼叫)</pre>"
+                + "<script>"
+                + "var TOKEN='" + escape(settings.getApiToken()) + "';"
+                + "function show(o){document.getElementById('out').textContent=typeof o==='string'?o:JSON.stringify(o,null,2);}"
+                + "function call(p,m,b){var x=new XMLHttpRequest();x.open(m,p);"
+                + "x.setRequestHeader('X-API-Token',TOKEN);"
+                + "if(b)x.setRequestHeader('Content-Type','application/json');"
+                + "x.onload=function(){show(x.responseText);};"
+                + "x.onerror=function(){show('連線失敗');};"
+                + "x.send(b||null);}"
+                + "function testPrint(){call('/print/sunmi','POST',JSON.stringify({mode:'test',shopName:'測試店',orderNo:'T001',datetime:new Date().toLocaleString(),items:[{name:'測試商品',qty:1,price:100}],total:100,footer:'謝謝光臨'}));}"
+                + "function openDrawer(){call('/drawer/open','POST','{}');}"
+                + "</script></body></html>";
+        Response r = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html);
+        return cors(r);
+    }
+
+    // ===== /print/sunmi =====
+    private Response handlePrintSunmi(IHTTPSession session) {
+        try {
+            String body = readBody(session);
+            JSONObject obj = new JSONObject(body);
+            String mode = obj.optString("mode", "receipt");
+            boolean ok;
+            if ("test".equals(mode)) {
+                ok = sunmi.printPosReceipt(body);
+            } else {
+                ok = sunmi.printPosReceipt(body);
+            }
+            if (ok) {
+                return cors(json(true, "{\"mode\":\"" + escape(mode) + "\"}", null));
+            } else {
+                return cors(json(false, null, settings.getLastPrintError()));
+            }
+        } catch (Exception e) {
+            LogManager.e(TAG, "handlePrintSunmi failed", e);
+            return cors(json(false, null, e.getMessage()));
+        }
+    }
+
+    // ===== /print/bluetooth =====
+    private Response handlePrintBluetooth(IHTTPSession session) {
+        try {
+            String body = readBody(session);
+            if (bluetooth == null) {
+                return cors(json(false, null, "bluetooth manager not ready"));
+            }
+            boolean ok = bluetooth.printJson(body);
+            settings.recordPrintResult(ok, ok ? "" : "bluetooth print failed");
+            return cors(json(ok, "{}", ok ? null : "bluetooth print failed"));
+        } catch (Exception e) {
+            settings.recordPrintResult(false, e.getMessage());
+            LogManager.e(TAG, "handlePrintBluetooth failed", e);
+            return cors(json(false, null, e.getMessage()));
+        }
+    }
+
+    // ===== /print/network =====
+    private Response handlePrintNetwork(IHTTPSession session) {
+        try {
+            String body = readBody(session);
+            if (network == null) {
+                return cors(json(false, null, "network manager not ready"));
+            }
+            boolean ok = network.printJson(body);
+            settings.recordPrintResult(ok, ok ? "" : "network print failed");
+            return cors(json(ok, "{}", ok ? null : "network print failed"));
+        } catch (Exception e) {
+            settings.recordPrintResult(false, e.getMessage());
+            LogManager.e(TAG, "handlePrintNetwork failed", e);
+            return cors(json(false, null, e.getMessage()));
+        }
+    }
+
+    // ===== /drawer/open =====
+    private Response handleDrawerOpen(IHTTPSession session) {
+        try {
+            boolean ok = false;
+            String via = "none";
+            if (sunmi != null && sunmi.isConnected()) {
+                ok = sunmi.openCashDrawer();
+                via = "sunmi";
+            } else if (bluetooth != null && bluetooth.isConnected()) {
+                ok = bluetooth.openDrawer();
+                via = "bluetooth";
+            } else if (network != null && network.isConnected()) {
+                ok = network.openDrawer();
+                via = "network";
+            }
+            LogManager.i(TAG, "drawer open via=" + via + " ok=" + ok);
+            return cors(json(ok, "{\"via\":\"" + via + "\"}", ok ? null : "no available printer"));
+        } catch (Exception e) {
+            LogManager.e(TAG, "handleDrawerOpen failed", e);
+            return cors(json(false, null, e.getMessage()));
+        }
+    }
+
+    // ===== utils =====
+
+    private String readBody(IHTTPSession session) throws IOException, ResponseException {
+        Map<String, String> files = new HashMap<>();
+        session.parseBody(files);
+        String body = files.get("postData");
+        if (body == null) {
+            // 後備：直接讀 input stream
+            InputStream is = session.getInputStream();
+            if (is != null) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
+                body = out.toString("UTF-8");
+            }
+        }
+        return body == null ? "" : body;
+    }
+
+    private Response json(boolean ok, String dataJson, String error) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        sb.append("\"ok\":").append(ok).append(",");
+        if (dataJson == null || dataJson.isEmpty()) {
+            sb.append("\"data\":null,");
         } else {
-            return corsOk(jsonError("Open drawer failed via " + via));
+            sb.append("\"data\":").append(dataJson).append(",");
         }
+        sb.append("\"error\":").append(error == null ? "null" : ("\"" + escape(error) + "\""));
+        sb.append("}");
+        return newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", sb.toString());
     }
 
-    // ==================== 工具 ====================
-
-    /** 讀取 POST body */
-    private String readBody(IHTTPSession session) {
-        try {
-            Map<String, String> files = new HashMap<>();
-            session.parseBody(files);
-            String body = files.get("postData");
-            return body != null ? body.trim() : "";
-        } catch (IOException | ResponseException e) {
-            Log.w(TAG, "readBody error", e);
-            return "";
-        }
+    private Response cors(Response r) {
+        r.addHeader("Access-Control-Allow-Origin", "*");
+        r.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        r.addHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Token");
+        r.addHeader("Access-Control-Max-Age", "86400");
+        return r;
     }
 
-    /** 包成 { "ok": true, "data": ... } */
-    private String jsonOk(JSONObject data) {
+    private String escape(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+    }
+
+    private String getApkVersion() {
         try {
-            JSONObject r = new JSONObject();
-            r.put("ok", true);
-            if (data != null) r.put("data", data);
-            return r.toString();
+            String name = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName;
+            return name == null ? "?" : name;
         } catch (Exception e) {
-            return "{\"ok\":true}";
+            return "?";
         }
     }
 
-    /** 包成 { "ok": false, "error": "..." } */
-    private String jsonError(String msg) {
-        try {
-            JSONObject r = new JSONObject();
-            r.put("ok", false);
-            r.put("error", msg != null ? msg : "unknown error");
-            return r.toString();
-        } catch (Exception e) {
-            return "{\"ok\":false,\"error\":\"unknown\"}";
-        }
-    }
-
-    /** 回傳 JSON Response 並加 CORS header */
-    private Response corsOk(String json) {
-        return corsOk(json, Response.Status.OK);
-    }
-
-    private Response corsOk(String json, Response.Status status) {
-        Response resp = newFixedLengthResponse(status, "application/json; charset=utf-8", json);
-        resp.addHeader("Access-Control-Allow-Origin", "*");
-        resp.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        resp.addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-        resp.addHeader("Access-Control-Max-Age", "3600");
-        return resp;
+    @SuppressWarnings("unused")
+    private String now() {
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date());
     }
 }
