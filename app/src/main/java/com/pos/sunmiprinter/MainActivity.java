@@ -17,32 +17,54 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import java.util.List;
+
 /**
- * MainActivity — 服務狀態頁
- * 顯示 HTTP Server 是否運行、本機 IP、埠號
- * 提供啟動/停止服務 與 進入設定頁 按鈕
- * WebView 已完全移除
+ * MainActivity — 健康檢查頁（v20260603 項目 8）
+ * 四區塊：
+ *  1) APK 版本 + Server 狀態 + 本機 IP
+ *  2) 三台印表機狀態（每 3 秒刷新）含 paperOut/coverOpen/overheat 警示
+ *  3) 最近 10 筆錯誤日誌（從 LogManager.getRecentErrors）
+ *  4) 四顆按鈕：測試列印、重啟服務、查看完整日誌、設定
  */
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
+    private static final String APK_VERSION = "v20260603";
+    private static final long REFRESH_INTERVAL_MS = 3000;
+
     private static final int COLOR_TEXT    = Color.parseColor("#212121");
     private static final int COLOR_HINT    = Color.parseColor("#757575");
     private static final int COLOR_SECTION = Color.parseColor("#1976D2");
     private static final int COLOR_GREEN   = Color.parseColor("#4CAF50");
     private static final int COLOR_RED     = Color.parseColor("#F44336");
+    private static final int COLOR_ORANGE  = Color.parseColor("#FF9800");
     private static final int COLOR_BG      = Color.WHITE;
 
-    // ── UI ──
+    // ── 區塊 1：服務狀態 ──
+    private TextView tvVersion;
     private TextView tvServiceStatus;
     private TextView tvIpPort;
+
+    // ── 區塊 2：印表機狀態 ──
     private TextView tvSunmiStatus;
+    private TextView tvSunmiAlert;
     private TextView tvBtStatus;
     private TextView tvNetStatus;
-    private Button   btnToggleService;
+
+    // ── 區塊 3：錯誤日誌 ──
+    private TextView tvErrorLog;
+
+    // ── 區塊 4：按鈕 ──
+    private Button btnTestPrint;
+    private Button btnRestartService;
+    private Button btnViewLogs;
+    private Button btnSettings;
+    private Button btnToggleService;
 
     // ── Service 綁定 ──
     private PrintService printService;
@@ -68,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable refreshTask = new Runnable() {
         @Override public void run() {
             refreshUi();
-            handler.postDelayed(this, 2000);
+            handler.postDelayed(this, REFRESH_INTERVAL_MS);
         }
     };
 
@@ -77,10 +99,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // LogManager 在 PrintService.onCreate 已 init，這裡再保險呼叫一次
+        LogManager.init(this);
         buildUi();
-        // 確保服務已啟動
         ensureServiceRunning();
-        // 綁定服務以查詢狀態
         bindToService();
     }
 
@@ -110,7 +132,7 @@ public class MainActivity extends AppCompatActivity {
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(COLOR_BG);
-        scroll.setPadding(dp(16), dp(24), dp(16), dp(24));
+        scroll.setPadding(dp(16), dp(20), dp(16), dp(20));
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -120,8 +142,8 @@ public class MainActivity extends AppCompatActivity {
 
         // ── 標題 ──
         TextView tvTitle = new TextView(this);
-        tvTitle.setText("POS 列印服務");
-        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
+        tvTitle.setText("POS 列印服務 健康檢查");
+        tvTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
         tvTitle.setTextColor(COLOR_SECTION);
         tvTitle.setTypeface(null, android.graphics.Typeface.BOLD);
         tvTitle.setGravity(Gravity.CENTER);
@@ -130,41 +152,46 @@ public class MainActivity extends AppCompatActivity {
 
         root.addView(divider());
 
-        // ── 服務狀態 ──
-        root.addView(sectionLabel("服務狀態"));
+        // ===== 區塊 1：服務狀態 =====
+        root.addView(sectionLabel("① 服務狀態"));
+
+        tvVersion = new TextView(this);
+        tvVersion.setText("APK 版本：" + APK_VERSION);
+        tvVersion.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tvVersion.setTextColor(COLOR_HINT);
+        tvVersion.setPadding(dp(8), dp(2), dp(8), dp(2));
+        root.addView(tvVersion);
 
         tvServiceStatus = new TextView(this);
         tvServiceStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        tvServiceStatus.setPadding(dp(8), dp(6), dp(8), dp(6));
+        tvServiceStatus.setTypeface(null, android.graphics.Typeface.BOLD);
+        tvServiceStatus.setPadding(dp(8), dp(6), dp(8), dp(2));
         root.addView(tvServiceStatus);
 
         tvIpPort = new TextView(this);
-        tvIpPort.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        tvIpPort.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         tvIpPort.setTextColor(COLOR_HINT);
         tvIpPort.setPadding(dp(8), dp(2), dp(8), dp(8));
         root.addView(tvIpPort);
 
-        // ── 服務控制按鈕 ──
-        LinearLayout btnRow1 = horizontal();
-
         btnToggleService = makeButton("停止服務", COLOR_RED);
         btnToggleService.setOnClickListener(v -> toggleService());
-        btnRow1.addView(btnToggleService);
+        root.addView(btnToggleService);
 
-        Button btnSettings = makeButton("⚙ 設定", COLOR_SECTION);
-        btnSettings.setOnClickListener(v -> {
-            startActivity(new Intent(MainActivity.this, SettingsActivity.class));
-        });
-        btnRow1.addView(btnSettings);
-
-        root.addView(btnRow1);
         root.addView(divider());
 
-        // ── 印表機狀態 ──
-        root.addView(sectionLabel("印表機狀態"));
+        // ===== 區塊 2：印表機狀態 =====
+        root.addView(sectionLabel("② 印表機狀態（每 3 秒刷新）"));
 
         tvSunmiStatus = statusLine("內建印表機（Sunmi）：偵測中...");
         root.addView(tvSunmiStatus);
+
+        tvSunmiAlert = new TextView(this);
+        tvSunmiAlert.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tvSunmiAlert.setTypeface(null, android.graphics.Typeface.BOLD);
+        tvSunmiAlert.setPadding(dp(8), dp(0), dp(8), dp(4));
+        tvSunmiAlert.setVisibility(android.view.View.GONE);
+        root.addView(tvSunmiAlert);
 
         tvBtStatus = statusLine("藍牙印表機：未連線");
         root.addView(tvBtStatus);
@@ -174,22 +201,51 @@ public class MainActivity extends AppCompatActivity {
 
         root.addView(divider());
 
-        // ── 使用說明 ──
-        root.addView(sectionLabel("使用說明"));
+        // ===== 區塊 3：最近錯誤日誌 =====
+        root.addView(sectionLabel("③ 最近錯誤（最多 10 筆）"));
 
-        TextView tvHelp = new TextView(this);
-        tvHelp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        tvHelp.setTextColor(COLOR_HINT);
-        tvHelp.setLineSpacing(0, 1.4f);
-        tvHelp.setPadding(dp(8), dp(4), dp(8), dp(4));
-        tvHelp.setText(
-            "1. 服務啟動後，APK 可最小化或關閉視窗\n" +
-            "2. 開機後服務會自動啟動，無需手動開啟\n" +
-            "3. 網頁透過 http://127.0.0.1:埠號 呼叫列印\n" +
-            "4. iPad / 其他裝置請使用瀏覽器列印功能\n" +
-            "5. 如服務異常，點「停止服務」再「啟動服務」"
-        );
-        root.addView(tvHelp);
+        tvErrorLog = new TextView(this);
+        tvErrorLog.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tvErrorLog.setTextColor(COLOR_TEXT);
+        tvErrorLog.setBackgroundColor(Color.parseColor("#FFF3E0"));
+        tvErrorLog.setPadding(dp(10), dp(8), dp(10), dp(8));
+        tvErrorLog.setLineSpacing(0, 1.3f);
+        tvErrorLog.setText("（讀取中...）");
+        tvErrorLog.setTextIsSelectable(true);
+        root.addView(tvErrorLog);
+
+        root.addView(divider());
+
+        // ===== 區塊 4：操作按鈕 =====
+        root.addView(sectionLabel("④ 操作"));
+
+        LinearLayout btnRow1 = horizontal();
+        btnTestPrint = makeButton("🖨 測試列印", COLOR_GREEN);
+        btnTestPrint.setOnClickListener(v -> doTestPrint());
+        btnRow1.addView(btnTestPrint);
+
+        btnRestartService = makeButton("⟳ 重啟服務", COLOR_ORANGE);
+        btnRestartService.setOnClickListener(v -> doRestartService());
+        btnRow1.addView(btnRestartService);
+        root.addView(btnRow1);
+
+        LinearLayout btnRow2 = horizontal();
+        btnViewLogs = makeButton("📋 查看完整日誌", COLOR_SECTION);
+        btnViewLogs.setOnClickListener(v -> doOpenLogs());
+        btnRow2.addView(btnViewLogs);
+
+        btnSettings = makeButton("⚙ 設定", COLOR_SECTION);
+        btnSettings.setOnClickListener(v -> {
+            startActivity(new Intent(MainActivity.this, SettingsActivity.class));
+        });
+        btnRow2.addView(btnSettings);
+        root.addView(btnRow2);
+
+        // 底部留白
+        android.view.View spacer = new android.view.View(this);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+        root.addView(spacer);
 
         scroll.addView(root);
         setContentView(scroll);
@@ -213,13 +269,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void toggleService() {
         if (!serviceBound || printService == null) {
-            // 嘗試啟動
             ensureServiceRunning();
             bindToService();
             return;
         }
         if (printService.isServerRunning()) {
-            // 停止服務
             if (serviceBound) {
                 unbindService(serviceConnection);
                 serviceBound = false;
@@ -227,14 +281,87 @@ public class MainActivity extends AppCompatActivity {
             }
             stopService(new Intent(this, PrintService.class));
         } else {
-            // 啟動服務
             ensureServiceRunning();
             bindToService();
         }
         handler.postDelayed(this::refreshUi, 800);
     }
 
-    // ==================== UI 更新 ====================
+    // ==================== 區塊 4：按鈕動作 ====================
+
+    private void doTestPrint() {
+        if (!serviceBound || printService == null || !printService.isSunmiConnected()) {
+            toast("Sunmi 印表機未連線");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                String text = "POS 列印服務測試\n"
+                        + "版本：" + APK_VERSION + "\n"
+                        + "時間：" + new java.text.SimpleDateFormat(
+                                "yyyy-MM-dd HH:mm:ss",
+                                java.util.Locale.getDefault()).format(new java.util.Date())
+                        + "\n"
+                        + "--------------------------------\n"
+                        + "若您看到此單表示列印橋接運作正常\n\n\n";
+                final boolean ok = printService.getSunmiPrinter() != null
+                        && printService.getSunmiPrinter().printText(text);
+                runOnUiThread(() -> toast(ok ? "測試列印已送出 ✓" : "列印失敗，請看錯誤日誌"));
+                handler.postDelayed(this::refreshUi, 500);
+            } catch (Throwable t) {
+                LogManager.e(TAG, "doTestPrint failed", t);
+                runOnUiThread(() -> toast("列印異常：" + t.getMessage()));
+            }
+        }).start();
+    }
+
+    private void doRestartService() {
+        if (serviceBound && printService != null) {
+            printService.restartHttpServer();
+            toast("已要求重啟 HTTP Server");
+        } else {
+            ensureServiceRunning();
+            bindToService();
+            toast("正在啟動服務...");
+        }
+        handler.postDelayed(this::refreshUi, 1200);
+    }
+
+    private void doOpenLogs() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== 日誌位置 ===\n");
+        sb.append(LogManager.getLogDirPath()).append("\n\n");
+        sb.append("=== 最近 50 筆 ===\n");
+        try {
+            List<String> rows = LogManager.getRecent(50);
+            if (rows.isEmpty()) {
+                sb.append("（無）");
+            } else {
+                for (String r : rows) sb.append(r).append("\n");
+            }
+        } catch (Throwable t) {
+            sb.append("讀取失敗：").append(t.getMessage());
+        }
+        showTextDialog("完整日誌", sb.toString());
+    }
+
+    private void showTextDialog(String title, String content) {
+        ScrollView sv = new ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(content);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        tv.setTextIsSelectable(true);
+        tv.setPadding(dp(16), dp(12), dp(16), dp(12));
+        sv.addView(tv);
+
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(sv)
+                .setPositiveButton("關閉", null)
+                .show();
+    }
+
+    // ==================== UI 刷新 ====================
 
     private void refreshUi() {
         if (serviceBound && printService != null) {
@@ -252,10 +379,8 @@ public class MainActivity extends AppCompatActivity {
             btnToggleService.setText(running ? "停止服務" : "啟動服務");
             btnToggleService.setBackgroundColor(running ? COLOR_RED : COLOR_GREEN);
 
-            // 印表機狀態
-            boolean sunmiOk = printService.isSunmiConnected();
-            tvSunmiStatus.setText("內建印表機（Sunmi）：" + (sunmiOk ? "已連線 ✓" : "未連線"));
-            tvSunmiStatus.setTextColor(sunmiOk ? COLOR_GREEN : COLOR_HINT);
+            // 印表機狀態（含警示）
+            updateSunmiStatusUi();
 
             boolean btOk = printService.isBluetoothConnected();
             tvBtStatus.setText("藍牙印表機：" + (btOk ? "已連線 ✓" : "未連線"));
@@ -273,10 +398,74 @@ public class MainActivity extends AppCompatActivity {
             btnToggleService.setBackgroundColor(COLOR_GREEN);
             tvSunmiStatus.setText("內建印表機（Sunmi）：—");
             tvSunmiStatus.setTextColor(COLOR_HINT);
+            tvSunmiAlert.setVisibility(android.view.View.GONE);
             tvBtStatus.setText("藍牙印表機：—");
             tvBtStatus.setTextColor(COLOR_HINT);
             tvNetStatus.setText("網路印表機：—");
             tvNetStatus.setTextColor(COLOR_HINT);
+        }
+
+        // 錯誤日誌（每次刷新都更新）
+        updateErrorLogUi();
+    }
+
+    private void updateSunmiStatusUi() {
+        if (printService == null || printService.getSunmiPrinter() == null) {
+            tvSunmiStatus.setText("內建印表機（Sunmi）：—");
+            tvSunmiStatus.setTextColor(COLOR_HINT);
+            tvSunmiAlert.setVisibility(android.view.View.GONE);
+            return;
+        }
+        com.pos.sunmiprinter.printer.SunmiPrinterManager.PrinterStatusInfo info =
+                printService.getSunmiPrinter().getPrinterStatusInfo();
+
+        tvSunmiStatus.setText("內建印表機（Sunmi）："
+                + (info.connected ? "已連線 ✓" : "未連線") + "（raw=" + info.raw + "）");
+        tvSunmiStatus.setTextColor(info.connected ? COLOR_GREEN : COLOR_HINT);
+
+        StringBuilder alert = new StringBuilder();
+        if (info.paperOut)    alert.append("⚠ 缺紙  ");
+        if (info.coverOpen)   alert.append("⚠ 蓋未關  ");
+        if (info.overheat)    alert.append("⚠ 過熱  ");
+        if (info.cutterError) alert.append("⚠ 切刀異常  ");
+
+        // 加上 lastPrint 失敗警示
+        try {
+            AppSettings s = new AppSettings(getApplicationContext());
+            if (s.getLastPrintAt() > 0 && !s.getLastPrintOk()) {
+                alert.append("❌ 上次列印失敗");
+            }
+        } catch (Throwable ignored) {}
+
+        if (alert.length() > 0) {
+            tvSunmiAlert.setText(alert.toString().trim());
+            tvSunmiAlert.setTextColor(COLOR_RED);
+            tvSunmiAlert.setVisibility(android.view.View.VISIBLE);
+        } else {
+            tvSunmiAlert.setVisibility(android.view.View.GONE);
+        }
+    }
+
+    private void updateErrorLogUi() {
+        try {
+            List<String> errs = LogManager.getRecentErrors(10);
+            if (errs == null || errs.isEmpty()) {
+                tvErrorLog.setText("（目前無錯誤紀錄）");
+                tvErrorLog.setTextColor(COLOR_HINT);
+                tvErrorLog.setBackgroundColor(Color.parseColor("#E8F5E9"));
+            } else {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < errs.size(); i++) {
+                    if (i > 0) sb.append("\n");
+                    sb.append("• ").append(errs.get(i));
+                }
+                tvErrorLog.setText(sb.toString());
+                tvErrorLog.setTextColor(COLOR_TEXT);
+                tvErrorLog.setBackgroundColor(Color.parseColor("#FFF3E0"));
+            }
+        } catch (Throwable t) {
+            tvErrorLog.setText("讀取錯誤日誌失敗：" + t.getMessage());
+            tvErrorLog.setTextColor(COLOR_RED);
         }
     }
 
@@ -285,10 +474,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView sectionLabel(String text) {
         TextView tv = new TextView(this);
         tv.setText(text);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         tv.setTextColor(COLOR_SECTION);
         tv.setTypeface(null, android.graphics.Typeface.BOLD);
-        tv.setPadding(dp(4), dp(12), dp(4), dp(4));
+        tv.setPadding(dp(4), dp(12), dp(4), dp(6));
         return tv;
     }
 
@@ -312,7 +501,7 @@ public class MainActivity extends AppCompatActivity {
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         lp.setMargins(dp(4), dp(4), dp(4), dp(4));
         btn.setLayoutParams(lp);
-        btn.setPadding(dp(8), dp(10), dp(8), dp(10));
+        btn.setPadding(dp(8), dp(12), dp(8), dp(12));
         return btn;
     }
 
@@ -339,5 +528,9 @@ public class MainActivity extends AppCompatActivity {
     private int dp(int v) {
         return (int) TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
+    }
+
+    private void toast(String msg) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
     }
 }
