@@ -242,11 +242,11 @@ public class PrintHttpServer extends NanoHTTPD {
         return cors(r);
     }
 
-    // ===== /print/sunmi =====
+        // ===== /print/sunmi =====
     private Response handlePrintSunmi(IHTTPSession session) {
         try {
-            String body = readBody(session);
-            boolean ok = sunmi.printPosReceipt(body);
+            final String body = readBody(session);
+            boolean ok = PrintQueue.submitAndWait("print/sunmi", () -> sunmi.printPosReceipt(body));
             String err = (settings != null) ? settings.getLastPrintError() : "";
             if (ok) {
                 return cors(json(true, "{}", null));
@@ -262,11 +262,11 @@ public class PrintHttpServer extends NanoHTTPD {
     // ===== /print/bluetooth =====
     private Response handlePrintBluetooth(IHTTPSession session) {
         try {
-            String body = readBody(session);
+            final String body = readBody(session);
             if (bluetooth == null) {
                 return cors(json(false, null, "bluetooth manager not ready"));
             }
-            boolean ok = bluetooth.printPosReceipt(body);
+            boolean ok = PrintQueue.submitAndWait("print/bluetooth", () -> bluetooth.printPosReceipt(body));
             if (settings != null) settings.recordPrintResult(ok, ok ? "" : "bluetooth print failed");
             return cors(json(ok, "{}", ok ? null : "bluetooth print failed"));
         } catch (Exception e) {
@@ -279,11 +279,11 @@ public class PrintHttpServer extends NanoHTTPD {
     // ===== /print/network =====
     private Response handlePrintNetwork(IHTTPSession session) {
         try {
-            String body = readBody(session);
+            final String body = readBody(session);
             if (network == null) {
                 return cors(json(false, null, "network manager not ready"));
             }
-            boolean ok = network.printPosReceipt(body);
+            boolean ok = PrintQueue.submitAndWait("print/network", () -> network.printPosReceipt(body));
             if (settings != null) settings.recordPrintResult(ok, ok ? "" : "network print failed");
             return cors(json(ok, "{}", ok ? null : "network print failed"));
         } catch (Exception e) {
@@ -296,25 +296,30 @@ public class PrintHttpServer extends NanoHTTPD {
     // ===== /drawer/open =====
     private Response handleDrawerOpen(IHTTPSession session) {
         try {
-            boolean ok = false;
-            String via = "none";
-            if (sunmi != null && sunmi.isConnected()) {
-                ok = sunmi.openCashDrawer();
-                via = "sunmi";
-            } else if (bluetooth != null && bluetooth.isConnected()) {
-                ok = bluetooth.openCashDrawer();
-                via = "bluetooth";
-            } else if (network != null && network.isConnected()) {
-                ok = network.openCashDrawer();
-                via = "network";
-            }
-            LogManager.i(TAG, "drawer open via=" + via + " ok=" + ok);
-            return cors(json(ok, "{\"via\":\"" + via + "\"}", ok ? null : "no available printer"));
+            final boolean[] result = {false};
+            final String[] viaArr = {"none"};
+            PrintQueue.submitAndWait("drawer/open", () -> {
+                if (sunmi != null && sunmi.isConnected()) {
+                    result[0] = sunmi.openCashDrawer();
+                    viaArr[0] = "sunmi";
+                } else if (bluetooth != null && bluetooth.isConnected()) {
+                    result[0] = bluetooth.openCashDrawer();
+                    viaArr[0] = "bluetooth";
+                } else if (network != null && network.isConnected()) {
+                    result[0] = network.openCashDrawer();
+                    viaArr[0] = "network";
+                }
+                return result[0];
+            });
+            LogManager.i(TAG, "drawer open via=" + viaArr[0] + " ok=" + result[0]);
+            return cors(json(result[0], "{\"via\":\"" + viaArr[0] + "\"}",
+                    result[0] ? null : "no available printer"));
         } catch (Exception e) {
             LogManager.e(TAG, "handleDrawerOpen failed", e);
             return cors(json(false, null, e.getMessage()));
         }
     }
+
 
     // ===== utils =====
 
