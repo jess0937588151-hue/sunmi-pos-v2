@@ -158,6 +158,64 @@ public class SettingsActivity extends AppCompatActivity {
         root.addView(tvPortNote);
 
         root.addView(divider());
+                // ===== API Token (v20260603) =====
+        root.addView(sectionTitle("API Token"));
+
+        TextView tvTokenNote = new TextView(this);
+        tvTokenNote.setText("網頁端呼叫列印時需在 header 帶 X-API-Token，未填寫則不檢查");
+        tvTokenNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tvTokenNote.setTextColor(COLOR_HINT);
+        tvTokenNote.setPadding(0, dp(2), 0, dp(6));
+        root.addView(tvTokenNote);
+
+        final TextView tvToken = new TextView(this);
+        tvToken.setText(settings.getApiToken());
+        tvToken.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tvToken.setTextColor(COLOR_TEXT);
+        tvToken.setBackgroundColor(Color.parseColor("#F5F5F5"));
+        tvToken.setPadding(dp(10), dp(10), dp(10), dp(10));
+        tvToken.setTextIsSelectable(true);
+        root.addView(tvToken);
+
+        LinearLayout tokenBtnRow = horizontal();
+        Button btnTokenCopy = button("複製 Token");
+        btnTokenCopy.setOnClickListener(v -> {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("api_token", settings.getApiToken()));
+                toast("Token 已複製");
+            }
+        });
+        tokenBtnRow.addView(btnTokenCopy);
+
+        Button btnTokenRegen = dangerButton("重新生成");
+        btnTokenRegen.setOnClickListener(v -> {
+            settings.regenerateApiToken();
+            tvToken.setText(settings.getApiToken());
+            toast("已重新生成，網頁端需更新 token");
+        });
+        tokenBtnRow.addView(btnTokenRegen);
+        root.addView(tokenBtnRow);
+
+        root.addView(divider());
+
+        // ===== 最後列印狀態 (v20260603) =====
+        root.addView(sectionTitle("最後列印狀態"));
+
+        final TextView tvLastPrint = new TextView(this);
+        tvLastPrint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        tvLastPrint.setPadding(dp(8), dp(6), dp(8), dp(6));
+        tvLastPrint.setLineSpacing(0, 1.4f);
+        updateLastPrintText(tvLastPrint);
+        root.addView(tvLastPrint);
+
+        Button btnRefreshLast = button("刷新");
+        btnRefreshLast.setOnClickListener(v -> updateLastPrintText(tvLastPrint));
+        root.addView(btnRefreshLast);
+
+        root.addView(divider());
+
 
         // ===== 內建印表機 =====
         root.addView(sectionTitle("內建印表機（Sunmi）"));
@@ -663,4 +721,25 @@ public class SettingsActivity extends AppCompatActivity {
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
     }
+        private void updateLastPrintText(TextView tv) {
+        long at = settings.getLastPrintAt();
+        if (at <= 0) {
+            tv.setText("（尚無列印紀錄）");
+            tv.setTextColor(COLOR_HINT);
+            return;
+        }
+        boolean ok = settings.getLastPrintOk();
+        String err = settings.getLastPrintError();
+        String time = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                java.util.Locale.getDefault()).format(new java.util.Date(at));
+        StringBuilder sb = new StringBuilder();
+        sb.append("時間：").append(time).append("\n");
+        sb.append("結果：").append(ok ? "✓ 成功" : "✗ 失敗");
+        if (!ok && err != null && !err.isEmpty()) {
+            sb.append("\n錯誤：").append(err);
+        }
+        tv.setText(sb.toString());
+        tv.setTextColor(ok ? Color.parseColor("#4CAF50") : Color.parseColor("#F44336"));
+    }
+
 }
