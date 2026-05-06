@@ -146,6 +146,16 @@ public class LogManager {
     public static String getLogDirPath() {
         return logDir == null ? "(not initialized)" : logDir.getAbsolutePath();
     }
+    /** 提供 PrintHttpServer 取得 AppSettings（需先 init 才能拿到 context） */
+    public static AppSettings getAppSettings() {
+        if (appContext == null) return null;
+        return new AppSettings(appContext);
+    }
+
+    /** 提供 PrintHttpServer 取得 Context */
+    public static Context getAppContext() {
+        return appContext;
+    }
 
     /** 取得最近錯誤（errors.txt 最後 N 行） */
     public static synchronized List<String> getRecentErrors(int lines) {
