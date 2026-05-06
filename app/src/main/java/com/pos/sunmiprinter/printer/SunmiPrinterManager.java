@@ -211,10 +211,13 @@ public class SunmiPrinterManager {
             printerService.printTextWithFont("謝謝光臨\n", "", 24, innerCallback);
             printerService.setAlignment(0, innerCallback);
 
-            feedAndCut();
-            openCashDrawer();
+                        feedAndCut();
+            if (data.optBoolean("openDrawer", false)) {
+                openCashDrawer();
+            }
         });
     }
+
 
     public boolean printReceiptJson(String jsonStr) {
         return printPosReceipt(jsonStr);
@@ -246,16 +249,16 @@ public class SunmiPrinterManager {
 
     // ==================== 硬體控制 ====================
 
-    public boolean cutPaper() {
+        public boolean cutPaper() {
         if (!isConnected()) return false;
         try {
-            printerService.lineWrap(3, innerCallback);
+            printerService.lineWrap(1, innerCallback);
             printerService.cutPaper(innerCallback);
             return true;
         } catch (RemoteException e) {
             // 如果 cutPaper 方法不存在，用 RAW 指令
             try {
-                printerService.lineWrap(3, innerCallback);
+                printerService.lineWrap(1, innerCallback);
                 printerService.sendRAWData(new byte[]{0x1D, 0x56, 0x01}, innerCallback);
                 return true;
             } catch (RemoteException e2) {
@@ -264,6 +267,7 @@ public class SunmiPrinterManager {
             }
         }
     }
+
 
     public boolean openCashDrawer() {
         if (!isConnected()) return false;
@@ -309,8 +313,9 @@ public class SunmiPrinterManager {
 
     // ==================== 內部工具 ====================
 
-    private void feedAndCut() throws RemoteException {
-        printerService.lineWrap(4, innerCallback);
+        private void feedAndCut() throws RemoteException {
+        printerService.lineWrap(1, innerCallback);
+
         try {
             printerService.cutPaper(innerCallback);
         } catch (Exception e) {
