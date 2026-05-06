@@ -18,6 +18,8 @@ import android.util.Log;
 import com.pos.sunmiprinter.printer.BluetoothPrinterManager;
 import com.pos.sunmiprinter.printer.NetworkPrinterManager;
 import com.pos.sunmiprinter.printer.SunmiPrinterManager;
+import fi.iki.elonen.NanoHTTPD;
+
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -122,29 +124,41 @@ public class PrintService extends Service {
 
     // ==================== HTTP Server ====================
 
-    private void startHttpServer() {
+        private void startHttpServer() {
         stopHttpServer();
         int port = settings.getHttpPort();
         try {
             httpServer = new PrintHttpServer(port, sunmiPrinter, btPrinter, netPrinter);
-            httpServer.start();
+            // 關鍵：第二個參數 false = 非 daemon thread，避免 Android 7.1 回收
+            httpServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
             serverRunning = true;
             Log.d(TAG, "HTTP Server started on 127.0.0.1:" + port);
+            LogManager.i(TAG, "HTTP Server started on 127.0.0.1:" + port);
             updateNotification();
         } catch (Exception e) {
             Log.e(TAG, "HTTP Server start failed", e);
+            LogManager.e(TAG, "HTTP Server start failed on port " + port, e);
             serverRunning = false;
+            httpServer = null;
+            updateNotification();
         }
     }
 
-    private void stopHttpServer() {
+
+       private void stopHttpServer() {
         if (httpServer != null) {
-            httpServer.stop();
+            try {
+                httpServer.stop();
+            } catch (Throwable t) {
+                LogManager.w(TAG, "stop httpServer error: " + t.getMessage());
+            }
             httpServer = null;
             serverRunning = false;
             Log.d(TAG, "HTTP Server stopped");
+            LogManager.i(TAG, "HTTP Server stopped");
         }
     }
+
 
     /** 埠號設定變更時呼叫 */
     public void restartHttpServer() {
