@@ -50,15 +50,14 @@ public class PrintService extends Service {
     private AppSettings settings;
     private Handler handler;
 
-    private boolean serverRunning = false;
-
-    LogManager.init(this);
+   private boolean serverRunning = false;
 
     // ==================== 生命週期 ====================
 
     @Override
     public void onCreate() {
         super.onCreate();
+        LogManager.init(this);
         Log.d(TAG, "onCreate");
 
         handler = new Handler(Looper.getMainLooper());
