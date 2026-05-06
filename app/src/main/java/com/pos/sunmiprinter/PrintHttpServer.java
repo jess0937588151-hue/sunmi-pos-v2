@@ -323,22 +323,38 @@ public class PrintHttpServer extends NanoHTTPD {
 
     // ===== utils =====
 
-    private String readBody(IHTTPSession session) throws IOException, ResponseException {
+        private String readBody(IHTTPSession session) throws IOException, ResponseException {
+        // NanoHTTPD parseBody 把每個 byte 當 char 直接塞進 String（等同 ISO-8859-1 解碼），
+        // 中文 UTF-8 byte 序列會被當成 latin-1 字元保留下來。
+        // 解法：先 parseBody 拿到「假 latin-1 字串」，再用 ISO-8859-1 取回原始 byte，
+        //       最後用 UTF-8 重新組成正確的中文字串。
         Map<String, String> files = new HashMap<>();
-        session.parseBody(files);
+        try {
+            session.parseBody(files);
+        } catch (Exception e) {
+            LogManager.w(TAG, "parseBody warn: " + e.getMessage());
+        }
         String body = files.get("postData");
-        if (body == null) {
-            InputStream is = session.getInputStream();
-            if (is != null) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
-                body = out.toString("UTF-8");
+        if (body != null) {
+            try {
+                return new String(body.getBytes("ISO-8859-1"), "UTF-8");
+            } catch (Exception e) {
+                LogManager.w(TAG, "utf8 reencode failed: " + e.getMessage());
+                return body;
             }
         }
-        return body == null ? "" : body;
+        // fallback：直接從 InputStream 讀（罕見情境）
+        InputStream is = session.getInputStream();
+        if (is != null) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toString("UTF-8");
+        }
+        return "";
     }
+
 
     private Response json(boolean ok, String dataJson, String error) {
         StringBuilder sb = new StringBuilder();
