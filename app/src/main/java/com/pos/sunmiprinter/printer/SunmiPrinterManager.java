@@ -1,11 +1,15 @@
 package com.pos.sunmiprinter.printer;
 
+import android.content.ComponentName;
 import android.content.Context;
-import android.graphics.Bitmap;
+import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
 
+import com.pos.sunmiprinter.AppSettings;
+import com.pos.sunmiprinter.LogManager;
 import com.sunmi.peripheral.printer.InnerPrinterCallback;
+import com.sunmi.peripheral.printer.InnerPrinterException;
 import com.sunmi.peripheral.printer.InnerPrinterManager;
 import com.sunmi.peripheral.printer.InnerResultCallback;
 import com.sunmi.peripheral.printer.SunmiPrinterService;
@@ -13,65 +17,62 @@ import com.sunmi.peripheral.printer.SunmiPrinterService;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+/**
+ * Sunmi 內建印表機管理
+ * v20260603:
+ *   - 新增 PrinterStatusInfo 詳細狀態（連線/缺紙/開蓋/過熱）
+ *   - 每次列印結果寫入 AppSettings.recordPrintResult，供 /ping 與健康檢查 UI 使用
+ *   - 所有 catch 改用 LogManager.e 紀錄
+ */
 public class SunmiPrinterManager {
 
-    private static final String TAG = "SunmiPrinter";
-    private static final int MAX_RETRY = 3;
-    private static final long RETRY_DELAY = 500;
+    private static final String TAG = "SunmiPrinterManager";
+    private static final int MAX_RETRY = 2;
+    private static final long RETRY_DELAY = 300;
 
     private SunmiPrinterService printerService;
     private final Context context;
+    private final AppSettings settings;
     private boolean bound = false;
 
-    private final InnerResultCallback innerCallback = new InnerResultCallback() {
+    private final InnerPrinterCallback callback = new InnerPrinterCallback() {
         @Override
-        public void onRunResult(boolean isSuccess) { Log.d(TAG, "onRunResult=" + isSuccess); }
+        protected void onConnected(SunmiPrinterService service) {
+            printerService = service;
+            bound = true;
+            LogManager.i(TAG, "SunmiPrinterService connected");
+        }
         @Override
-        public void onReturnString(String result) { Log.d(TAG, "onReturnString=" + result); }
-        @Override
-        public void onRaiseException(int code, String msg) { Log.e(TAG, "onRaiseException code=" + code + " msg=" + msg); }
-        @Override
-        public void onPrintResult(int code, String msg) { Log.d(TAG, "onPrintResult code=" + code + " msg=" + msg); }
+        protected void onDisconnected() {
+            printerService = null;
+            bound = false;
+            LogManager.w(TAG, "SunmiPrinterService disconnected");
+        }
     };
 
-    public SunmiPrinterManager(Context context) {
-        this.context = context;
+    public SunmiPrinterManager(Context ctx) {
+        this.context = ctx.getApplicationContext();
+        this.settings = new AppSettings(this.context);
     }
 
-    // ==================== 連線管理 ====================
+    // ===== Connection =====
 
     public void bind() {
         try {
-            boolean result = InnerPrinterManager.getInstance().bindService(context, new InnerPrinterCallback() {
-                @Override
-                protected void onConnected(SunmiPrinterService service) {
-                    printerService = service;
-                    bound = true;
-                    Log.d(TAG, "Printer service connected via library");
-                }
-
-                @Override
-                protected void onDisconnected() {
-                    printerService = null;
-                    bound = false;
-                    Log.w(TAG, "Printer service disconnected");
-                }
-            });
-            Log.d(TAG, "bindService result=" + result);
-        } catch (Exception e) {
-            Log.e(TAG, "bind error", e);
+            InnerPrinterManager.getInstance().bindService(context, callback);
+        } catch (InnerPrinterException e) {
+            LogManager.e(TAG, "bindService failed", e);
         }
     }
 
     public void unbind() {
-        if (bound) {
-            try {
-                InnerPrinterManager.getInstance().unBindService(context, null);
-            } catch (Exception e) {
-                Log.w(TAG, "unbind error", e);
+        try {
+            if (bound) {
+                InnerPrinterManager.getInstance().unBindService(context, callback);
+                bound = false;
             }
-            bound = false;
-            printerService = null;
+        } catch (InnerPrinterException e) {
+            LogManager.e(TAG, "unBindService failed", e);
         }
     }
 
@@ -79,223 +80,311 @@ public class SunmiPrinterManager {
         return bound && printerService != null;
     }
 
+    /**
+     * 取得印表機原始狀態 int（向後相容）
+     * 0 / -1 等定義依 Sunmi SDK
+     */
     public int getPrinterStatus() {
         if (!isConnected()) return -1;
         try {
             return printerService.updatePrinterState();
         } catch (RemoteException e) {
-            Log.e(TAG, "getPrinterStatus error", e);
+            LogManager.e(TAG, "getPrinterStatus failed", e);
             return -1;
         }
     }
 
-    // ==================== 基本列印 ====================
-
-    public boolean printText(String text) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.printTextWithFont(text + "\n", "", 24, innerCallback);
-        });
+    /**
+     * v20260603 詳細狀態
+     * Sunmi updatePrinterState() 回傳值參考:
+     *   1: 正常工作
+     *   2: 印表機準備中
+     *   3: 通訊異常
+     *   4: 缺紙
+     *   5: 過熱
+     *   6: 開蓋
+     *   7: 切刀異常
+     *   8: 切刀復位
+     *   9: 黑標未找到
+     *   505: 沒有檢測到印表機
+     */
+    public PrinterStatusInfo getPrinterStatusInfo() {
+        PrinterStatusInfo info = new PrinterStatusInfo();
+        info.connected = isConnected();
+        info.raw = getPrinterStatus();
+        switch (info.raw) {
+            case 4: info.paperOut = true; break;
+            case 5: info.overheat = true; break;
+            case 6: info.coverOpen = true; break;
+            case 7: case 8: info.cutterError = true; break;
+            default: break;
+        }
+        return info;
     }
 
-    public boolean printTextWithFont(String text, String typeface, float size) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.printTextWithFont(text + "\n", typeface, size, innerCallback);
-        });
+    public static class PrinterStatusInfo {
+        public boolean connected;
+        public boolean paperOut;
+        public boolean coverOpen;
+        public boolean overheat;
+        public boolean cutterError;
+        public int raw = -1;
+
+        public String toJson() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{");
+            sb.append("\"connected\":").append(connected).append(",");
+            sb.append("\"paperOut\":").append(paperOut).append(",");
+            sb.append("\"coverOpen\":").append(coverOpen).append(",");
+            sb.append("\"overheat\":").append(overheat).append(",");
+            sb.append("\"cutterError\":").append(cutterError).append(",");
+            sb.append("\"raw\":").append(raw);
+            sb.append("}");
+            return sb.toString();
+        }
     }
 
-    public boolean printColumns(String[] texts, int[] widths, int[] aligns) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.printColumnsText(texts, widths, aligns, innerCallback);
-        });
+    // ===== Basic Print =====
+
+    public void printText(String text) throws RemoteException {
+        if (!isConnected()) throw new RemoteException("printer not connected");
+        printerService.printText(text, null);
     }
 
-    public boolean printBitmap(Bitmap bitmap) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.printBitmap(bitmap, innerCallback);
-        });
+    public void printTextWithFont(String text, String typeface, float fontSize) throws RemoteException {
+        if (!isConnected()) throw new RemoteException("printer not connected");
+        printerService.printTextWithFont(text, typeface, fontSize, null);
     }
 
-    public boolean printBarcode(String data, int symbology, int height, int width, int textPosition) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.printBarCode(data, symbology, height, width, textPosition, innerCallback);
-        });
+    public void printColumns(String[] colsText, int[] colsWidth, int[] colsAlign) throws RemoteException {
+        if (!isConnected()) throw new RemoteException("printer not connected");
+        printerService.printColumnsString(colsText, colsWidth, colsAlign, null);
     }
 
-    public boolean printQRCode(String data, int moduleSize, int errorLevel) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.printQRCode(data, moduleSize, errorLevel, innerCallback);
-        });
+    public void printBitmap(android.graphics.Bitmap bmp) throws RemoteException {
+        if (!isConnected()) throw new RemoteException("printer not connected");
+        printerService.printBitmap(bmp, null);
     }
 
-    // ==================== 收據列印 ====================
-
-    public boolean printReceipt(String title, String body) {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.setAlignment(1, innerCallback);
-            printerService.printTextWithFont(title + "\n", "", 32, innerCallback);
-            printerService.setAlignment(0, innerCallback);
-            printerService.printTextWithFont(body + "\n", "", 24, innerCallback);
-            feedAndCut();
-        });
+    public void printBarcode(String data, int symbology, int height, int width, int textPos) throws RemoteException {
+        if (!isConnected()) throw new RemoteException("printer not connected");
+        printerService.printBarCode(data, symbology, height, width, textPos, null);
     }
 
-    public boolean printPosReceipt(String jsonStr) {
-        return retry(() -> {
-            JSONObject data = new JSONObject(jsonStr);
-            printerService.printerInit(innerCallback);
+    public void printQRCode(String data, int moduleSize, int errorLevel) throws RemoteException {
+        if (!isConnected()) throw new RemoteException("printer not connected");
+        printerService.printQRCode(data, moduleSize, errorLevel, null);
+    }
 
-            printerService.setAlignment(1, innerCallback);
-            printerService.printTextWithFont(
-                    data.optString("shopName", "POS") + "\n", "", 36, innerCallback);
+    // ===== High-level: 收據 / POS 收據 =====
 
-            String subtitle = data.optString("subtitle", "");
-            if (!subtitle.isEmpty()) {
-                printerService.printTextWithFont(subtitle + "\n", "", 22, innerCallback);
+    /**
+     * 列印 JSON 收據，回傳 true=成功
+     * v20260603: 紀錄 lastPrintAt / lastPrintOk / lastPrintError
+     */
+    public boolean printReceipt(String json) {
+        if (!isConnected()) {
+            settings.recordPrintResult(false, "printer not connected");
+            LogManager.e(TAG, "printReceipt: printer not connected");
+            return false;
+        }
+        try {
+            JSONObject obj = new JSONObject(json);
+            String text = obj.optString("text", "");
+            if (!text.isEmpty()) {
+                printerService.printText(text + "\n", null);
             }
+            feedAndCut();
+            settings.recordPrintResult(true, "");
+            LogManager.i(TAG, "printReceipt ok, len=" + (text == null ? 0 : text.length()));
+            return true;
+        } catch (Exception e) {
+            settings.recordPrintResult(false, e.getMessage());
+            LogManager.e(TAG, "printReceipt failed", e);
+            return false;
+        }
+    }
 
-            printerService.printTextWithFont("--------------------------------\n", "", 24, innerCallback);
-            printerService.setAlignment(0, innerCallback);
+    /**
+     * 列印完整 POS 收據（解析 JSON 結構）
+     * 結構: { shopName, subtitle, orderNo, datetime, items:[{name,qty,price}], total, openDrawer, footer }
+     */
+    public boolean printPosReceipt(String json) {
+        if (!isConnected()) {
+            settings.recordPrintResult(false, "printer not connected");
+            LogManager.e(TAG, "printPosReceipt: printer not connected");
+            return false;
+        }
+        try {
+            JSONObject obj = new JSONObject(json);
+            String shopName = obj.optString("shopName", "");
+            String subtitle = obj.optString("subtitle", "");
+            String orderNo = obj.optString("orderNo", "");
+            String datetime = obj.optString("datetime", "");
+            String footer = obj.optString("footer", "");
+            boolean openDrawer = obj.optBoolean("openDrawer", false);
 
-            String orderNo = data.optString("orderNumber", "");
-            if (!orderNo.isEmpty())
-                printerService.printTextWithFont("單號: " + orderNo + "\n", "", 24, innerCallback);
-            String dateTime = data.optString("dateTime", "");
-            if (!dateTime.isEmpty())
-                printerService.printTextWithFont("時間: " + dateTime + "\n", "", 24, innerCallback);
-            String orderType = data.optString("orderType", "");
-            if (!orderType.isEmpty())
-                printerService.printTextWithFont("類型: " + orderType + "\n", "", 24, innerCallback);
-            String payment = data.optString("paymentMethod", "");
-            if (!payment.isEmpty())
-                printerService.printTextWithFont("付款: " + payment + "\n", "", 24, innerCallback);
+            // Header
+            if (!shopName.isEmpty()) {
+                printerService.setAlignment(1, null);
+                printerService.printTextWithFont(shopName + "\n", null, 32, null);
+            }
+            if (!subtitle.isEmpty()) {
+                printerService.setAlignment(1, null);
+                printerService.printTextWithFont(subtitle + "\n", null, 24, null);
+            }
+            printerService.setAlignment(0, null);
+            if (!orderNo.isEmpty()) printerService.printText("Order: " + orderNo + "\n", null);
+            if (!datetime.isEmpty()) printerService.printText("Time : " + datetime + "\n", null);
+            printerService.printText("--------------------------------\n", null);
 
-            printerService.printTextWithFont("--------------------------------\n", "", 24, innerCallback);
-
-            JSONArray items = data.optJSONArray("items");
+            // Items
+            JSONArray items = obj.optJSONArray("items");
             if (items != null) {
                 for (int i = 0; i < items.length(); i++) {
-                    JSONObject item = items.getJSONObject(i);
-                    String name = item.optString("name", "");
-                    int qty = item.optInt("qty", 0);
-                    int price = item.optInt("price", 0);
-                    String options = item.optString("options", "");
-
-                    printerService.printColumnsText(
-                            new String[]{name, "x" + qty, "$" + price},
-                            new int[]{14, 6, 10},
-                            new int[]{0, 1, 2},
-                            innerCallback);
-
-                    if (!options.isEmpty()) {
-                        printerService.printTextWithFont("  " + options + "\n", "", 20, innerCallback);
-                    }
+                    JSONObject it = items.getJSONObject(i);
+                    String name = it.optString("name", "");
+                    int qty = it.optInt("qty", 1);
+                    double price = it.optDouble("price", 0);
+                    String[] cols = new String[]{name, String.valueOf(qty), String.format("%.0f", price)};
+                    int[] widths = new int[]{18, 4, 6};
+                    int[] aligns = new int[]{0, 2, 2};
+                    printerService.printColumnsString(cols, widths, aligns, null);
                 }
             }
+            printerService.printText("--------------------------------\n", null);
 
-            printerService.printTextWithFont("--------------------------------\n", "", 24, innerCallback);
+            // Total
+            if (obj.has("total")) {
+                double total = obj.optDouble("total", 0);
+                printerService.setAlignment(2, null);
+                printerService.printTextWithFont("TOTAL: " + String.format("%.0f", total) + "\n", null, 28, null);
+                printerService.setAlignment(0, null);
+            }
 
-            printerService.setAlignment(2, innerCallback);
-            printerService.printTextWithFont(
-                    "合計: $" + data.optString("total", "0") + "\n", "", 32, innerCallback);
-            printerService.setAlignment(0, innerCallback);
+            // Footer
+            if (!footer.isEmpty()) {
+                printerService.setAlignment(1, null);
+                printerService.printText(footer + "\n", null);
+                printerService.setAlignment(0, null);
+            }
 
-            printerService.printTextWithFont("--------------------------------\n", "", 24, innerCallback);
-            printerService.setAlignment(1, innerCallback);
-            printerService.printTextWithFont("謝謝光臨\n", "", 24, innerCallback);
-            printerService.setAlignment(0, innerCallback);
+            feedAndCut();
 
-                        feedAndCut();
-            if (data.optBoolean("openDrawer", false)) {
+            // 開錢箱（僅當 openDrawer=true）
+            if (openDrawer) {
                 openCashDrawer();
             }
-        });
+
+            settings.recordPrintResult(true, "");
+            LogManager.i(TAG, "printPosReceipt ok, orderNo=" + orderNo);
+            return true;
+        } catch (Exception e) {
+            settings.recordPrintResult(false, e.getMessage());
+            LogManager.e(TAG, "printPosReceipt failed", e);
+            return false;
+        }
     }
 
-
-    public boolean printReceiptJson(String jsonStr) {
-        return printPosReceipt(jsonStr);
+    /** alias */
+    public boolean printReceiptJson(String json) {
+        return printPosReceipt(json);
     }
 
-    public boolean printHtml(String title, String htmlContent) {
-        String plainText = htmlContent
-                .replaceAll("<br\\s*/?>", "\n")
-                .replaceAll("<[^>]+>", "")
-                .replaceAll("&nbsp;", " ")
-                .replaceAll("&amp;", "&")
-                .replaceAll("&lt;", "<")
-                .replaceAll("&gt;", ">")
-                .trim();
-        return printReceipt(title, plainText);
+    /**
+     * 簡易 HTML → 純文字後列印
+     */
+    public boolean printHtml(String html) {
+        if (!isConnected()) {
+            settings.recordPrintResult(false, "printer not connected");
+            return false;
+        }
+        try {
+            String plain = html == null ? "" : html.replaceAll("<[^>]+>", "").replace("&nbsp;", " ").trim();
+            printerService.printText(plain + "\n", null);
+            feedAndCut();
+            settings.recordPrintResult(true, "");
+            return true;
+        } catch (Exception e) {
+            settings.recordPrintResult(false, e.getMessage());
+            LogManager.e(TAG, "printHtml failed", e);
+            return false;
+        }
     }
 
     public boolean printTestReceipt() {
-        return retry(() -> {
-            printerService.printerInit(innerCallback);
-            printerService.setAlignment(1, innerCallback);
-            printerService.printTextWithFont("** 測試收據 **\n", "", 32, innerCallback);
-            printerService.setAlignment(0, innerCallback);
-            printerService.printTextWithFont("印表機運作正常\n", "", 24, innerCallback);
-            printerService.printTextWithFont("時間: " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()) + "\n", "", 24, innerCallback);
-            feedAndCut();
-        });
-    }
-
-    // ==================== 硬體控制 ====================
-
-        public boolean cutPaper() {
-        if (!isConnected()) return false;
-        try {
-            printerService.lineWrap(1, innerCallback);
-            printerService.cutPaper(innerCallback);
-            return true;
-        } catch (RemoteException e) {
-            // 如果 cutPaper 方法不存在，用 RAW 指令
-            try {
-                printerService.lineWrap(1, innerCallback);
-                printerService.sendRAWData(new byte[]{0x1D, 0x56, 0x01}, innerCallback);
-                return true;
-            } catch (RemoteException e2) {
-                Log.e(TAG, "cutPaper error", e2);
-                return false;
-            }
+        if (!isConnected()) {
+            settings.recordPrintResult(false, "printer not connected");
+            return false;
         }
-    }
-
-
-    public boolean openCashDrawer() {
-        if (!isConnected()) return false;
         try {
-            printerService.openDrawer(innerCallback);
-            Log.d(TAG, "Cash drawer opened via API");
+            printerService.setAlignment(1, null);
+            printerService.printTextWithFont("** 測試列印 **\n", null, 32, null);
+            printerService.setAlignment(0, null);
+            printerService.printText("Time: " + new java.util.Date().toString() + "\n", null);
+            printerService.printText("APK : Sunmi POS Bridge\n", null);
+            printerService.printText("Status raw: " + getPrinterStatus() + "\n", null);
+            feedAndCut();
+            settings.recordPrintResult(true, "");
+            LogManager.i(TAG, "printTestReceipt ok");
             return true;
         } catch (Exception e) {
-            // fallback to RAW
+            settings.recordPrintResult(false, e.getMessage());
+            LogManager.e(TAG, "printTestReceipt failed", e);
+            return false;
+        }
+    }
+
+    // ===== Hardware control =====
+
+    public void cutPaper() {
+        if (!isConnected()) return;
+        try {
+            printerService.lineWrap(1, null);
+            printerService.cutPaper(null);
+        } catch (Throwable t) {
+            LogManager.w(TAG, "cutPaper API failed, fallback RAW", t);
             try {
-                printerService.sendRAWData(new byte[]{0x10, 0x14, 0x01, 0x00, 0x05}, innerCallback);
-                Log.d(TAG, "Cash drawer opened via RAW");
+                printerService.lineWrap(1, null);
+                byte[] raw = new byte[]{0x1D, 0x56, 0x42, 0x00};
+                printerService.sendRAWData(raw, null);
+            } catch (Exception ex) {
+                LogManager.e(TAG, "cutPaper RAW failed", ex);
+            }
+        }
+    }
+
+    public boolean openCashDrawer() {
+        if (!isConnected()) {
+            LogManager.w(TAG, "openCashDrawer: printer not connected");
+            return false;
+        }
+        try {
+            printerService.openDrawer(null);
+            LogManager.i(TAG, "openCashDrawer via API ok");
+            return true;
+        } catch (Throwable t) {
+            LogManager.w(TAG, "openCashDrawer API failed, fallback RAW", t);
+            try {
+                byte[] raw = new byte[]{0x1B, 0x70, 0x00, 0x19, (byte) 0xFA};
+                printerService.sendRAWData(raw, null);
                 return true;
-            } catch (RemoteException e2) {
-                Log.e(TAG, "openCashDrawer error", e2);
+            } catch (Exception ex) {
+                LogManager.e(TAG, "openCashDrawer RAW failed", ex);
                 return false;
             }
         }
     }
 
-    public boolean buzzer() {
+    public boolean buzzer(int times, int interval) {
         if (!isConnected()) return false;
         try {
-            printerService.sendRAWData(new byte[]{0x1B, 0x42, 0x03, 0x03}, innerCallback);
-            Log.d(TAG, "Buzzer triggered");
+            // ESC B n t  -> 0x1B 0x42 n t
+            byte[] raw = new byte[]{0x1B, 0x42, (byte) times, (byte) interval};
+            printerService.sendRAWData(raw, null);
             return true;
-        } catch (RemoteException e) {
-            Log.e(TAG, "buzzer error", e);
+        } catch (Exception e) {
+            LogManager.e(TAG, "buzzer failed", e);
             return false;
         }
     }
@@ -303,44 +392,53 @@ public class SunmiPrinterManager {
     public boolean sendRawData(byte[] data) {
         if (!isConnected()) return false;
         try {
-            printerService.sendRAWData(data, innerCallback);
+            printerService.sendRAWData(data, null);
             return true;
-        } catch (RemoteException e) {
-            Log.e(TAG, "sendRawData error", e);
+        } catch (Exception e) {
+            LogManager.e(TAG, "sendRawData failed", e);
             return false;
         }
     }
 
-    // ==================== 內部工具 ====================
-
-        private void feedAndCut() throws RemoteException {
-        printerService.lineWrap(1, innerCallback);
-
+    private void feedAndCut() {
+        if (!isConnected()) return;
         try {
-            printerService.cutPaper(innerCallback);
-        } catch (Exception e) {
-            printerService.sendRAWData(new byte[]{0x1D, 0x56, 0x01}, innerCallback);
-        }
-    }
-
-    private interface PrintTask {
-        void run() throws Exception;
-    }
-
-    private boolean retry(PrintTask task) {
-        if (!isConnected()) return false;
-        for (int i = 0; i < MAX_RETRY; i++) {
+            printerService.lineWrap(1, null);
+            printerService.cutPaper(null);
+        } catch (Throwable t) {
+            LogManager.w(TAG, "feedAndCut failed, fallback RAW", t);
             try {
-                task.run();
-                return true;
-            } catch (Exception e) {
-                Log.w(TAG, "Print attempt " + (i + 1) + " failed", e);
-                if (i < MAX_RETRY - 1) {
-                    try { Thread.sleep(RETRY_DELAY); } catch (InterruptedException ignored) {}
-                }
+                printerService.lineWrap(1, null);
+                byte[] raw = new byte[]{0x1D, 0x56, 0x42, 0x00};
+                printerService.sendRAWData(raw, null);
+            } catch (Exception ex) {
+                LogManager.e(TAG, "feedAndCut RAW failed", ex);
             }
         }
-        Log.e(TAG, "Print failed after " + MAX_RETRY + " attempts");
+    }
+
+    // ===== Retry =====
+
+    public interface PrintTask {
+        boolean run() throws Exception;
+    }
+
+    public boolean retry(PrintTask task) {
+        Exception last = null;
+        for (int i = 0; i < MAX_RETRY; i++) {
+            try {
+                if (task.run()) return true;
+            } catch (Exception e) {
+                last = e;
+                LogManager.w(TAG, "PrintTask attempt " + (i + 1) + " failed", e);
+            }
+            try { Thread.sleep(RETRY_DELAY); } catch (InterruptedException ignored) {}
+        }
+        if (last != null) {
+            LogManager.e(TAG, "PrintTask exhausted retries", last);
+        } else {
+            LogManager.e(TAG, "PrintTask exhausted retries (no exception)");
+        }
         return false;
     }
 }
