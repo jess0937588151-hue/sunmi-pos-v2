@@ -1,12 +1,8 @@
 package com.pos.sunmiprinter;
 
-import android.content.Context;
-
 import com.pos.sunmiprinter.printer.BluetoothPrinterManager;
 import com.pos.sunmiprinter.printer.NetworkPrinterManager;
 import com.pos.sunmiprinter.printer.SunmiPrinterManager;
-
-import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -23,34 +19,32 @@ import fi.iki.elonen.NanoHTTPD;
 /**
  * 本機 HTTP Server（NanoHTTPD），綁定 127.0.0.1
  * v20260603:
- *   - /ping 增加 paperOut/coverOpen/overheat/lastPrintAt/lastPrintOk/apkVersion
- *   - 新增 GET /logs?date=YYYY-MM-DD&lines=200&token=xxx (或 X-API-Token header)
- *   - 新增 GET /test  → 回傳測試列印 HTML 頁
- *   - /print/* 與 /drawer/open 需要 X-API-Token 驗證 (token 為空字串時不檢查，向後相容)
+ *   - /ping 增加 paperOut/coverOpen/overheat/lastPrintAt/lastPrintOk
+ *   - 新增 GET /logs?date=YYYY-MM-DD&lines=200 (需 X-API-Token)
+ *   - 新增 GET /test → 內建測試列印頁
+ *   - /print/* 與 /drawer/open 與 /logs 需要 X-API-Token (token 為空時不檢查)
  *   - 所有錯誤透過 LogManager.e 紀錄
- *   - 維持綁定 127.0.0.1（loopback），外部裝置無法連入
  */
 public class PrintHttpServer extends NanoHTTPD {
 
     private static final String TAG = "PrintHttpServer";
 
-    private final Context context;
     private final AppSettings settings;
     private final SunmiPrinterManager sunmi;
     private final BluetoothPrinterManager bluetooth;
     private final NetworkPrinterManager network;
 
-    public PrintHttpServer(Context ctx,
-                           int port,
+    public PrintHttpServer(int port,
                            SunmiPrinterManager sunmi,
                            BluetoothPrinterManager bluetooth,
                            NetworkPrinterManager network) {
         super("127.0.0.1", port);
-        this.context = ctx.getApplicationContext();
-        this.settings = new AppSettings(this.context);
         this.sunmi = sunmi;
         this.bluetooth = bluetooth;
         this.network = network;
+        // AppSettings 需要 Context；改用靜態無 Context 版本：直接讀 LogManager 中保留的 context
+        // 為了相容舊建構子，這裡延後在需要時取得 settings
+        this.settings = LogManager.getAppSettings();
     }
 
     @Override
@@ -106,6 +100,7 @@ public class PrintHttpServer extends NanoHTTPD {
 
     // ===== Token check =====
     private boolean checkToken(IHTTPSession session) {
+        if (settings == null) return true; // 沒 settings 就先放行
         String expected = settings.getApiToken();
         if (expected == null || expected.isEmpty()) {
             return true; // 向後相容：未設定 token 時不檢查
@@ -115,7 +110,7 @@ public class PrintHttpServer extends NanoHTTPD {
         if (got == null) got = headers.get("X-API-Token");
         if (got != null && expected.equals(got)) return true;
 
-        // 也允許 query string token=xxx（給 /logs 等 GET 用）
+        // 也允許 query string token=xxx
         Map<String, List<String>> params = session.getParameters();
         if (params != null) {
             List<String> qs = params.get("token");
@@ -129,7 +124,8 @@ public class PrintHttpServer extends NanoHTTPD {
         StringBuilder data = new StringBuilder();
         data.append("{");
         data.append("\"version\":\"").append(getApkVersion()).append("\",");
-        data.append("\"server\":\"127.0.0.1:").append(settings.getHttpPort()).append("\",");
+        int port = settings != null ? settings.getHttpPort() : 8080;
+        data.append("\"server\":\"127.0.0.1:").append(port).append("\",");
 
         SunmiPrinterManager.PrinterStatusInfo info = sunmi != null
                 ? sunmi.getPrinterStatusInfo()
@@ -146,9 +142,12 @@ public class PrintHttpServer extends NanoHTTPD {
         data.append("\"bluetoothConnected\":").append(btConn).append(",");
         data.append("\"networkConnected\":").append(netConn).append(",");
 
-        data.append("\"lastPrintAt\":").append(settings.getLastPrintAt()).append(",");
-        data.append("\"lastPrintOk\":").append(settings.getLastPrintOk()).append(",");
-        data.append("\"lastPrintError\":\"").append(escape(settings.getLastPrintError())).append("\",");
+        long lastAt = settings != null ? settings.getLastPrintAt() : 0L;
+        boolean lastOk = settings == null || settings.getLastPrintOk();
+        String lastErr = settings != null ? settings.getLastPrintError() : "";
+        data.append("\"lastPrintAt\":").append(lastAt).append(",");
+        data.append("\"lastPrintOk\":").append(lastOk).append(",");
+        data.append("\"lastPrintError\":\"").append(escape(lastErr)).append("\",");
         data.append("\"now\":").append(System.currentTimeMillis());
         data.append("}");
         return cors(json(true, data.toString(), null));
@@ -162,13 +161,16 @@ public class PrintHttpServer extends NanoHTTPD {
                 ? sunmi.getPrinterStatusInfo()
                 : new SunmiPrinterManager.PrinterStatusInfo();
         data.append("\"sunmi\":").append(info.toJson()).append(",");
+        String btAddr = settings != null ? settings.getBtAddress() : "";
+        String netIp = settings != null ? settings.getNetIp() : "";
+        int netPort = settings != null ? settings.getNetPort() : 9100;
         data.append("\"bluetooth\":{\"connected\":")
                 .append(bluetooth != null && bluetooth.isConnected())
-                .append(",\"address\":\"").append(escape(settings.getBtAddress())).append("\"},");
+                .append(",\"address\":\"").append(escape(btAddr)).append("\"},");
         data.append("\"network\":{\"connected\":")
                 .append(network != null && network.isConnected())
-                .append(",\"ip\":\"").append(escape(settings.getNetIp()))
-                .append("\",\"port\":").append(settings.getNetPort()).append("}");
+                .append(",\"ip\":\"").append(escape(netIp))
+                .append("\",\"port\":").append(netPort).append("}");
         data.append("}");
         return cors(json(true, data.toString(), null));
     }
@@ -206,8 +208,9 @@ public class PrintHttpServer extends NanoHTTPD {
         return cors(json(true, data.toString(), null));
     }
 
-    // ===== /test (簡單測試頁) =====
+    // ===== /test =====
     private Response handleTestPage() {
+        String token = settings != null ? settings.getApiToken() : "";
         String html = "<!doctype html><html><head><meta charset='utf-8'>"
                 + "<title>POS 列印橋接測試</title>"
                 + "<style>body{font-family:sans-serif;padding:20px;font-size:16px}"
@@ -216,7 +219,7 @@ public class PrintHttpServer extends NanoHTTPD {
                 + "</head><body>"
                 + "<h2>POS 列印橋接測試</h2>"
                 + "<p>APK 版本: <b>" + getApkVersion() + "</b></p>"
-                + "<p>API Token: <code>" + escape(settings.getApiToken()) + "</code></p>"
+                + "<p>API Token: <code>" + escape(token) + "</code></p>"
                 + "<button onclick=\"call('/ping','GET')\">Ping</button>"
                 + "<button onclick=\"call('/printer/status','GET')\">印表機狀態</button>"
                 + "<button onclick=\"testPrint()\">測試列印</button>"
@@ -224,7 +227,7 @@ public class PrintHttpServer extends NanoHTTPD {
                 + "<button onclick=\"call('/logs?lines=50','GET')\">最近日誌</button>"
                 + "<pre id='out'>(尚未呼叫)</pre>"
                 + "<script>"
-                + "var TOKEN='" + escape(settings.getApiToken()) + "';"
+                + "var TOKEN='" + escape(token) + "';"
                 + "function show(o){document.getElementById('out').textContent=typeof o==='string'?o:JSON.stringify(o,null,2);}"
                 + "function call(p,m,b){var x=new XMLHttpRequest();x.open(m,p);"
                 + "x.setRequestHeader('X-API-Token',TOKEN);"
@@ -232,7 +235,7 @@ public class PrintHttpServer extends NanoHTTPD {
                 + "x.onload=function(){show(x.responseText);};"
                 + "x.onerror=function(){show('連線失敗');};"
                 + "x.send(b||null);}"
-                + "function testPrint(){call('/print/sunmi','POST',JSON.stringify({mode:'test',shopName:'測試店',orderNo:'T001',datetime:new Date().toLocaleString(),items:[{name:'測試商品',qty:1,price:100}],total:100,footer:'謝謝光臨'}));}"
+                + "function testPrint(){call('/print/sunmi','POST',JSON.stringify({shopName:'測試店',orderNumber:'T001',dateTime:new Date().toLocaleString(),items:[{name:'測試商品',qty:1,price:100}],total:'100'}));}"
                 + "function openDrawer(){call('/drawer/open','POST','{}');}"
                 + "</script></body></html>";
         Response r = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html);
@@ -243,18 +246,12 @@ public class PrintHttpServer extends NanoHTTPD {
     private Response handlePrintSunmi(IHTTPSession session) {
         try {
             String body = readBody(session);
-            JSONObject obj = new JSONObject(body);
-            String mode = obj.optString("mode", "receipt");
-            boolean ok;
-            if ("test".equals(mode)) {
-                ok = sunmi.printPosReceipt(body);
-            } else {
-                ok = sunmi.printPosReceipt(body);
-            }
+            boolean ok = sunmi.printPosReceipt(body);
+            String err = (settings != null) ? settings.getLastPrintError() : "";
             if (ok) {
-                return cors(json(true, "{\"mode\":\"" + escape(mode) + "\"}", null));
+                return cors(json(true, "{}", null));
             } else {
-                return cors(json(false, null, settings.getLastPrintError()));
+                return cors(json(false, null, err.isEmpty() ? "print failed" : err));
             }
         } catch (Exception e) {
             LogManager.e(TAG, "handlePrintSunmi failed", e);
@@ -269,11 +266,11 @@ public class PrintHttpServer extends NanoHTTPD {
             if (bluetooth == null) {
                 return cors(json(false, null, "bluetooth manager not ready"));
             }
-            boolean ok = bluetooth.printJson(body);
-            settings.recordPrintResult(ok, ok ? "" : "bluetooth print failed");
+            boolean ok = bluetooth.printPosReceipt(body);
+            if (settings != null) settings.recordPrintResult(ok, ok ? "" : "bluetooth print failed");
             return cors(json(ok, "{}", ok ? null : "bluetooth print failed"));
         } catch (Exception e) {
-            settings.recordPrintResult(false, e.getMessage());
+            if (settings != null) settings.recordPrintResult(false, e.getMessage());
             LogManager.e(TAG, "handlePrintBluetooth failed", e);
             return cors(json(false, null, e.getMessage()));
         }
@@ -286,11 +283,11 @@ public class PrintHttpServer extends NanoHTTPD {
             if (network == null) {
                 return cors(json(false, null, "network manager not ready"));
             }
-            boolean ok = network.printJson(body);
-            settings.recordPrintResult(ok, ok ? "" : "network print failed");
+            boolean ok = network.printPosReceipt(body);
+            if (settings != null) settings.recordPrintResult(ok, ok ? "" : "network print failed");
             return cors(json(ok, "{}", ok ? null : "network print failed"));
         } catch (Exception e) {
-            settings.recordPrintResult(false, e.getMessage());
+            if (settings != null) settings.recordPrintResult(false, e.getMessage());
             LogManager.e(TAG, "handlePrintNetwork failed", e);
             return cors(json(false, null, e.getMessage()));
         }
@@ -305,10 +302,10 @@ public class PrintHttpServer extends NanoHTTPD {
                 ok = sunmi.openCashDrawer();
                 via = "sunmi";
             } else if (bluetooth != null && bluetooth.isConnected()) {
-                ok = bluetooth.openDrawer();
+                ok = bluetooth.openCashDrawer();
                 via = "bluetooth";
             } else if (network != null && network.isConnected()) {
-                ok = network.openDrawer();
+                ok = network.openCashDrawer();
                 via = "network";
             }
             LogManager.i(TAG, "drawer open via=" + via + " ok=" + ok);
@@ -326,7 +323,6 @@ public class PrintHttpServer extends NanoHTTPD {
         session.parseBody(files);
         String body = files.get("postData");
         if (body == null) {
-            // 後備：直接讀 input stream
             InputStream is = session.getInputStream();
             if (is != null) {
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -368,13 +364,7 @@ public class PrintHttpServer extends NanoHTTPD {
     }
 
     private String getApkVersion() {
-        try {
-            String name = context.getPackageManager()
-                    .getPackageInfo(context.getPackageName(), 0).versionName;
-            return name == null ? "?" : name;
-        } catch (Exception e) {
-            return "?";
-        }
+        return "v20260603";
     }
 
     @SuppressWarnings("unused")
