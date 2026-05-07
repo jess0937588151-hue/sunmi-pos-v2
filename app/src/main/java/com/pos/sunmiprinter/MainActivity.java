@@ -18,10 +18,12 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import androidx.appcompat.app.AppCompatActivity;
-
 import java.util.List;
+import android.net.Uri;
+import android.os.PowerManager;
+import android.provider.Settings;
+
 
 /**
  * MainActivity — 健康檢查頁（v20260603 項目 8）
@@ -61,10 +63,12 @@ public class MainActivity extends AppCompatActivity {
 
     // ── 區塊 4：按鈕 ──
     private Button btnTestPrint;
-    private Button btnRestartService;
-    private Button btnViewLogs;
-    private Button btnSettings;
-    private Button btnToggleService;
+private Button btnRestartService;
+private Button btnViewLogs;
+private Button btnSettings;
+private Button btnToggleService;
+private Button btnBatteryWhitelist;
+
 
     // ── Service 綁定 ──
     private PrintService printService;
@@ -241,6 +245,14 @@ public class MainActivity extends AppCompatActivity {
         btnRow2.addView(btnSettings);
         root.addView(btnRow2);
 
+                // 第三排：電池優化白名單（防止系統殺掉服務）
+        LinearLayout btnRow3 = horizontal();
+        btnBatteryWhitelist = makeButton("🔋 防止系統關閉服務", COLOR_RED);
+        btnBatteryWhitelist.setOnClickListener(v -> requestIgnoreBatteryOptimizations());
+        btnRow3.addView(btnBatteryWhitelist);
+        root.addView(btnRow3);
+
+
         // 底部留白
         android.view.View spacer = new android.view.View(this);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(
@@ -343,6 +355,27 @@ public class MainActivity extends AppCompatActivity {
             sb.append("讀取失敗：").append(t.getMessage());
         }
         showTextDialog("完整日誌", sb.toString());
+    }
+    private void requestIgnoreBatteryOptimizations() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            String pkg = getPackageName();
+            if (pm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (pm.isIgnoringBatteryOptimizations(pkg)) {
+                    toast("已在電池優化白名單 ✓");
+                    return;
+                }
+                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + pkg));
+                startActivity(intent);
+                toast("請點「允許」加入白名單");
+            } else {
+                toast("此 Android 版本無需設定");
+            }
+        } catch (Throwable t) {
+            LogManager.e(TAG, "requestIgnoreBatteryOptimizations failed", t);
+            toast("開啟設定失敗：" + t.getMessage());
+        }
     }
 
     private void showTextDialog(String title, String content) {
