@@ -321,12 +321,55 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
-    private String readBody(IHTTPSession session) throws IOException, ResponseException {
+       private String readBody(IHTTPSession session) throws IOException, ResponseException {
         Map<String, String> headers = session.getHeaders();
         String ctype = headers.get("content-type");
         if (ctype == null) ctype = headers.get("Content-Type");
         LogManager.i(TAG, "readBody content-type=" + ctype);
 
+        // 從 header 取 Content-Length
+        int contentLength = 0;
+        String cl = headers.get("content-length");
+        if (cl == null) cl = headers.get("Content-Length");
+        if (cl != null) {
+            try { contentLength = Integer.parseInt(cl.trim()); } catch (Exception ignored) {}
+        }
+        LogManager.i(TAG, "readBody content-length=" + contentLength);
+
+        // 直接從 InputStream 讀原始 byte，完全不碰 parseBody（NanoHTTPD parseBody 對 application/json 走 US-ASCII，會把中文變成 ?）
+        InputStream is = session.getInputStream();
+        if (is != null && contentLength > 0) {
+            byte[] buf = new byte[contentLength];
+            int read = 0;
+            while (read < contentLength) {
+                int n = is.read(buf, read, contentLength - read);
+                if (n <= 0) break;
+                read += n;
+            }
+            LogManager.i(TAG, "readBody InputStream read=" + read + "/" + contentLength);
+
+            // log 前 40 byte 的 hex（不是 char），確認 byte 層真的有中文 UTF-8
+            StringBuilder hex = new StringBuilder();
+            int hLimit = Math.min(read, 40);
+            for (int i = 0; i < hLimit; i++) {
+                hex.append(String.format("%02x ", buf[i] & 0xFF));
+            }
+            LogManager.i(TAG, "readBody bytes(first40 hex)=" + hex);
+
+            String s = new String(buf, 0, read, "UTF-8");
+            String head = s.length() > 200 ? s.substring(0, 200) : s;
+            LogManager.i(TAG, "readBody UTF8 decoded head=" + head);
+            StringBuilder cps = new StringBuilder();
+            int limit = Math.min(head.length(), 40);
+            for (int i = 0; i < limit; i++) {
+                cps.append(Integer.toHexString(head.charAt(i))).append(' ');
+            }
+            LogManager.i(TAG, "readBody UTF8 codepoints(first40)=" + cps);
+            return s;
+        }
+
+        // 退路：若 Content-Length 拿不到，才走 parseBody（會壞中文，但至少能跑）
+        LogManager.w(TAG, "readBody fallback to parseBody (no content-length)");
         Map<String, String> files = new HashMap<>();
         try {
             session.parseBody(files);
@@ -334,49 +377,7 @@ public class PrintHttpServer extends NanoHTTPD {
             LogManager.w(TAG, "readBody parseBody warn: " + e.getMessage());
         }
         String body = files.get("postData");
-        LogManager.i(TAG, "readBody postData==null? " + (body == null)
-                + " rawLen=" + (body == null ? -1 : body.length()));
-
-        if (body != null) {
-            String rawHead = body.length() > 200 ? body.substring(0, 200) : body;
-            LogManager.i(TAG, "readBody RAW head=" + rawHead);
-            StringBuilder cps = new StringBuilder();
-            int limit = Math.min(rawHead.length(), 40);
-            for (int i = 0; i < limit; i++) {
-                cps.append(Integer.toHexString(rawHead.charAt(i))).append(' ');
-            }
-            LogManager.i(TAG, "readBody RAW codepoints(first40)=" + cps);
-
-            try {
-                String fixed = new String(body.getBytes("ISO-8859-1"), "UTF-8");
-                String fixedHead = fixed.length() > 200 ? fixed.substring(0, 200) : fixed;
-                LogManager.i(TAG, "readBody UTF8 head=" + fixedHead);
-                StringBuilder cps2 = new StringBuilder();
-                int limit2 = Math.min(fixedHead.length(), 40);
-                for (int i = 0; i < limit2; i++) {
-                    cps2.append(Integer.toHexString(fixedHead.charAt(i))).append(' ');
-                }
-                LogManager.i(TAG, "readBody UTF8 codepoints(first40)=" + cps2);
-                return fixed;
-            } catch (Exception e) {
-                LogManager.w(TAG, "readBody utf8 reencode failed: " + e.getMessage());
-                return body;
-            }
-        }
-
-        InputStream is = session.getInputStream();
-        if (is != null) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
-            String s = out.toString("UTF-8");
-            String head = s.length() > 200 ? s.substring(0, 200) : s;
-            LogManager.i(TAG, "readBody FALLBACK len=" + s.length() + " head=" + head);
-            return s;
-        }
-        LogManager.w(TAG, "readBody EMPTY (no postData, no inputStream)");
-        return "";
+        return body == null ? "" : body;
     }
 
     private Response json(boolean ok, String dataJson, String error) {
