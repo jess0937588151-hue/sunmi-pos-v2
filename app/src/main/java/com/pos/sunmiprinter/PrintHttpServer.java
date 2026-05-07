@@ -16,15 +16,6 @@ import java.util.Map;
 
 import fi.iki.elonen.NanoHTTPD;
 
-/**
- * 本機 HTTP Server（NanoHTTPD），綁定 127.0.0.1
- * v20260603:
- *   - /ping 增加 paperOut/coverOpen/overheat/lastPrintAt/lastPrintOk
- *   - 新增 GET /logs?date=YYYY-MM-DD&lines=200 (需 X-API-Token)
- *   - 新增 GET /test → 內建測試列印頁
- *   - /print/* 與 /drawer/open 與 /logs 需要 X-API-Token (token 為空時不檢查)
- *   - 所有錯誤透過 LogManager.e 紀錄
- */
 public class PrintHttpServer extends NanoHTTPD {
 
     private static final String TAG = "PrintHttpServer";
@@ -42,8 +33,6 @@ public class PrintHttpServer extends NanoHTTPD {
         this.sunmi = sunmi;
         this.bluetooth = bluetooth;
         this.network = network;
-        // AppSettings 需要 Context；改用靜態無 Context 版本：直接讀 LogManager 中保留的 context
-        // 為了相容舊建構子，這裡延後在需要時取得 settings
         this.settings = LogManager.getAppSettings();
     }
 
@@ -52,13 +41,11 @@ public class PrintHttpServer extends NanoHTTPD {
         Method method = session.getMethod();
         String uri = session.getUri();
 
-        // CORS preflight
         if (Method.OPTIONS.equals(method)) {
             return cors(newFixedLengthResponse(Response.Status.OK, "text/plain", ""));
         }
 
         try {
-            // ----- 不需 token 的端點 -----
             if (Method.GET.equals(method) && "/ping".equals(uri)) {
                 return handlePing();
             }
@@ -69,7 +56,6 @@ public class PrintHttpServer extends NanoHTTPD {
                 return handleTestPage();
             }
 
-            // ----- 以下端點需驗證 token -----
             if (!checkToken(session)) {
                 LogManager.w(TAG, "unauthorized: " + method + " " + uri);
                 return cors(json(false, null, "unauthorized"));
@@ -98,19 +84,17 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
-    // ===== Token check =====
     private boolean checkToken(IHTTPSession session) {
-        if (settings == null) return true; // 沒 settings 就先放行
+        if (settings == null) return true;
         String expected = settings.getApiToken();
         if (expected == null || expected.isEmpty()) {
-            return true; // 向後相容：未設定 token 時不檢查
+            return true;
         }
         Map<String, String> headers = session.getHeaders();
         String got = headers.get("x-api-token");
         if (got == null) got = headers.get("X-API-Token");
         if (got != null && expected.equals(got)) return true;
 
-        // 也允許 query string token=xxx
         Map<String, List<String>> params = session.getParameters();
         if (params != null) {
             List<String> qs = params.get("token");
@@ -119,7 +103,6 @@ public class PrintHttpServer extends NanoHTTPD {
         return false;
     }
 
-    // ===== /ping =====
     private Response handlePing() {
         StringBuilder data = new StringBuilder();
         data.append("{");
@@ -153,7 +136,6 @@ public class PrintHttpServer extends NanoHTTPD {
         return cors(json(true, data.toString(), null));
     }
 
-    // ===== /printer/status =====
     private Response handleStatus() {
         StringBuilder data = new StringBuilder();
         data.append("{");
@@ -175,7 +157,6 @@ public class PrintHttpServer extends NanoHTTPD {
         return cors(json(true, data.toString(), null));
     }
 
-    // ===== /logs =====
     private Response handleLogs(IHTTPSession session) {
         Map<String, List<String>> params = session.getParameters();
         String date = "";
@@ -208,7 +189,6 @@ public class PrintHttpServer extends NanoHTTPD {
         return cors(json(true, data.toString(), null));
     }
 
-    // ===== /test =====
     private Response handleTestPage() {
         String token = settings != null ? settings.getApiToken() : "";
         String html = "<!doctype html><html><head><meta charset='utf-8'>"
@@ -224,7 +204,7 @@ public class PrintHttpServer extends NanoHTTPD {
                 + "<button onclick=\"call('/printer/status','GET')\">印表機狀態</button>"
                 + "<button onclick=\"testPrint()\">測試列印</button>"
                 + "<button onclick=\"openDrawer()\">開錢箱</button>"
-                + "<button onclick=\"call('/logs?lines=50','GET')\">最近日誌</button>"
+                + "<button onclick=\"call('/logs?lines=80','GET')\">最近日誌</button>"
                 + "<pre id='out'>(尚未呼叫)</pre>"
                 + "<script>"
                 + "var TOKEN='" + escape(token) + "';"
@@ -242,12 +222,15 @@ public class PrintHttpServer extends NanoHTTPD {
         return cors(r);
     }
 
-        // ===== /print/sunmi =====
     private Response handlePrintSunmi(IHTTPSession session) {
         try {
+            LogManager.i(TAG, "handlePrintSunmi ENTRY");
             final String body = readBody(session);
+            String head = body == null ? "(null)" : (body.length() > 200 ? body.substring(0, 200) : body);
+            LogManager.i(TAG, "handlePrintSunmi body len=" + (body == null ? -1 : body.length()) + " head=" + head);
             boolean ok = PrintQueue.submitAndWait("print/sunmi", () -> sunmi.printPosReceipt(body));
             String err = (settings != null) ? settings.getLastPrintError() : "";
+            LogManager.i(TAG, "handlePrintSunmi DONE ok=" + ok + " err=" + err);
             if (ok) {
                 return cors(json(true, "{}", null));
             } else {
@@ -259,15 +242,19 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
-    // ===== /print/bluetooth =====
     private Response handlePrintBluetooth(IHTTPSession session) {
         try {
+            LogManager.i(TAG, "handlePrintBluetooth ENTRY");
             final String body = readBody(session);
+            String head = body == null ? "(null)" : (body.length() > 200 ? body.substring(0, 200) : body);
+            LogManager.i(TAG, "handlePrintBluetooth body len=" + (body == null ? -1 : body.length()) + " head=" + head);
             if (bluetooth == null) {
+                LogManager.w(TAG, "handlePrintBluetooth: bluetooth manager null");
                 return cors(json(false, null, "bluetooth manager not ready"));
             }
             boolean ok = PrintQueue.submitAndWait("print/bluetooth", () -> bluetooth.printPosReceipt(body));
             if (settings != null) settings.recordPrintResult(ok, ok ? "" : "bluetooth print failed");
+            LogManager.i(TAG, "handlePrintBluetooth DONE ok=" + ok);
             return cors(json(ok, "{}", ok ? null : "bluetooth print failed"));
         } catch (Exception e) {
             if (settings != null) settings.recordPrintResult(false, e.getMessage());
@@ -276,15 +263,19 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
-    // ===== /print/network =====
     private Response handlePrintNetwork(IHTTPSession session) {
         try {
+            LogManager.i(TAG, "handlePrintNetwork ENTRY");
             final String body = readBody(session);
+            String head = body == null ? "(null)" : (body.length() > 200 ? body.substring(0, 200) : body);
+            LogManager.i(TAG, "handlePrintNetwork body len=" + (body == null ? -1 : body.length()) + " head=" + head);
             if (network == null) {
+                LogManager.w(TAG, "handlePrintNetwork: network manager null");
                 return cors(json(false, null, "network manager not ready"));
             }
             boolean ok = PrintQueue.submitAndWait("print/network", () -> network.printPosReceipt(body));
             if (settings != null) settings.recordPrintResult(ok, ok ? "" : "network print failed");
+            LogManager.i(TAG, "handlePrintNetwork DONE ok=" + ok);
             return cors(json(ok, "{}", ok ? null : "network print failed"));
         } catch (Exception e) {
             if (settings != null) settings.recordPrintResult(false, e.getMessage());
@@ -293,9 +284,19 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
-    // ===== /drawer/open =====
     private Response handleDrawerOpen(IHTTPSession session) {
         try {
+            LogManager.i(TAG, "handleDrawerOpen ENTRY");
+            boolean sNotNull = sunmi != null;
+            boolean bNotNull = bluetooth != null;
+            boolean nNotNull = network != null;
+            boolean sConn = sNotNull && sunmi.isConnected();
+            boolean bConn = bNotNull && bluetooth.isConnected();
+            boolean nConn = nNotNull && network.isConnected();
+            LogManager.i(TAG, "handleDrawerOpen status sunmi(notNull=" + sNotNull + ",conn=" + sConn
+                    + ") bt(notNull=" + bNotNull + ",conn=" + bConn
+                    + ") net(notNull=" + nNotNull + ",conn=" + nConn + ")");
+
             final boolean[] result = {false};
             final String[] viaArr = {"none"};
             PrintQueue.submitAndWait("drawer/open", () -> {
@@ -311,7 +312,7 @@ public class PrintHttpServer extends NanoHTTPD {
                 }
                 return result[0];
             });
-            LogManager.i(TAG, "drawer open via=" + viaArr[0] + " ok=" + result[0]);
+            LogManager.i(TAG, "handleDrawerOpen DONE via=" + viaArr[0] + " ok=" + result[0]);
             return cors(json(result[0], "{\"via\":\"" + viaArr[0] + "\"}",
                     result[0] ? null : "no available printer"));
         } catch (Exception e) {
@@ -320,41 +321,63 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
+    private String readBody(IHTTPSession session) throws IOException, ResponseException {
+        Map<String, String> headers = session.getHeaders();
+        String ctype = headers.get("content-type");
+        if (ctype == null) ctype = headers.get("Content-Type");
+        LogManager.i(TAG, "readBody content-type=" + ctype);
 
-    // ===== utils =====
-
-        private String readBody(IHTTPSession session) throws IOException, ResponseException {
-        // NanoHTTPD parseBody 把每個 byte 當 char 直接塞進 String（等同 ISO-8859-1 解碼），
-        // 中文 UTF-8 byte 序列會被當成 latin-1 字元保留下來。
-        // 解法：先 parseBody 拿到「假 latin-1 字串」，再用 ISO-8859-1 取回原始 byte，
-        //       最後用 UTF-8 重新組成正確的中文字串。
         Map<String, String> files = new HashMap<>();
         try {
             session.parseBody(files);
         } catch (Exception e) {
-            LogManager.w(TAG, "parseBody warn: " + e.getMessage());
+            LogManager.w(TAG, "readBody parseBody warn: " + e.getMessage());
         }
         String body = files.get("postData");
+        LogManager.i(TAG, "readBody postData==null? " + (body == null)
+                + " rawLen=" + (body == null ? -1 : body.length()));
+
         if (body != null) {
+            String rawHead = body.length() > 200 ? body.substring(0, 200) : body;
+            LogManager.i(TAG, "readBody RAW head=" + rawHead);
+            StringBuilder cps = new StringBuilder();
+            int limit = Math.min(rawHead.length(), 40);
+            for (int i = 0; i < limit; i++) {
+                cps.append(Integer.toHexString(rawHead.charAt(i))).append(' ');
+            }
+            LogManager.i(TAG, "readBody RAW codepoints(first40)=" + cps);
+
             try {
-                return new String(body.getBytes("ISO-8859-1"), "UTF-8");
+                String fixed = new String(body.getBytes("ISO-8859-1"), "UTF-8");
+                String fixedHead = fixed.length() > 200 ? fixed.substring(0, 200) : fixed;
+                LogManager.i(TAG, "readBody UTF8 head=" + fixedHead);
+                StringBuilder cps2 = new StringBuilder();
+                int limit2 = Math.min(fixedHead.length(), 40);
+                for (int i = 0; i < limit2; i++) {
+                    cps2.append(Integer.toHexString(fixedHead.charAt(i))).append(' ');
+                }
+                LogManager.i(TAG, "readBody UTF8 codepoints(first40)=" + cps2);
+                return fixed;
             } catch (Exception e) {
-                LogManager.w(TAG, "utf8 reencode failed: " + e.getMessage());
+                LogManager.w(TAG, "readBody utf8 reencode failed: " + e.getMessage());
                 return body;
             }
         }
-        // fallback：直接從 InputStream 讀（罕見情境）
+
         InputStream is = session.getInputStream();
         if (is != null) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
             int n;
             while ((n = is.read(buf)) > 0) out.write(buf, 0, n);
-            return out.toString("UTF-8");
+            String s = out.toString("UTF-8");
+            String head = s.length() > 200 ? s.substring(0, 200) : s;
+            LogManager.i(TAG, "readBody FALLBACK len=" + s.length() + " head=" + head);
+            return s;
         }
+        LogManager.w(TAG, "readBody EMPTY (no postData, no inputStream)");
         return "";
     }
-
 
     private Response json(boolean ok, String dataJson, String error) {
         StringBuilder sb = new StringBuilder();
@@ -385,7 +408,7 @@ public class PrintHttpServer extends NanoHTTPD {
     }
 
     private String getApkVersion() {
-        return "v20260603";
+        return "v20260606-debug";
     }
 
     @SuppressWarnings("unused")
