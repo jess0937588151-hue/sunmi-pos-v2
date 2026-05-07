@@ -15,13 +15,6 @@ import com.sunmi.peripheral.printer.SunmiPrinterService;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/**
- * Sunmi 內建印表機管理（保留舊方法簽名給 PrintJsBridge / SettingsActivity 呼叫）
- * v20260603 新增:
- *   - getPrinterStatusInfo() / PrinterStatusInfo 詳細狀態
- *   - 列印結果寫入 AppSettings.recordPrintResult
- *   - 所有 catch 改用 LogManager 紀錄
- */
 public class SunmiPrinterManager {
 
     private static final String TAG = "SunmiPrinterManager";
@@ -53,11 +46,11 @@ public class SunmiPrinterManager {
         this.settings = new AppSettings(this.context);
     }
 
-    // ===== Connection =====
-
     public void bind() {
         try {
+            LogManager.i(TAG, "bind: requesting bindService");
             InnerPrinterManager.getInstance().bindService(context, callback);
+            LogManager.i(TAG, "bind: bindService called (waiting onConnected callback)");
         } catch (InnerPrinterException e) {
             LogManager.e(TAG, "bindService failed", e);
         }
@@ -88,13 +81,6 @@ public class SunmiPrinterManager {
         }
     }
 
-    /**
-     * Sunmi updatePrinterState() 回傳值參考:
-     *   1: 正常工作    2: 印表機準備中   3: 通訊異常
-     *   4: 缺紙        5: 過熱          6: 開蓋
-     *   7: 切刀異常    8: 切刀復位       9: 黑標未找到
-     *   505: 沒有檢測到印表機
-     */
     public PrinterStatusInfo getPrinterStatusInfo() {
         PrinterStatusInfo info = new PrinterStatusInfo();
         info.connected = isConnected();
@@ -130,8 +116,6 @@ public class SunmiPrinterManager {
             return sb.toString();
         }
     }
-
-    // ===== Basic Print（保留舊簽名：回傳 boolean）=====
 
     public boolean printText(String text) {
         if (!isConnected()) {
@@ -229,9 +213,6 @@ public class SunmiPrinterManager {
         }
     }
 
-    // ===== High-level: 收據 =====
-
-    /** 舊簽名: title + body 兩參數 */
     public boolean printReceipt(String title, String body) {
         if (!isConnected()) {
             settings.recordPrintResult(false, "printer not connected");
@@ -255,10 +236,6 @@ public class SunmiPrinterManager {
         }
     }
 
-    /**
-     * 列印完整 POS 收據（解析 JSON 結構，相容新舊欄位名）
-     * 接受: shopName/storeName, orderNo/orderNumber, datetime/dateTime, items, total, openDrawer, footer
-     */
     public boolean printPosReceipt(String json) {
         if (!isConnected()) {
             settings.recordPrintResult(false, "printer not connected");
@@ -266,6 +243,9 @@ public class SunmiPrinterManager {
             return false;
         }
         try {
+            String head = json == null ? "(null)" : (json.length() > 200 ? json.substring(0, 200) : json);
+            LogManager.i(TAG, "printPosReceipt ENTRY len=" + (json == null ? -1 : json.length()) + " head=" + head);
+
             JSONObject obj = new JSONObject(json);
             String shopName = obj.has("shopName") ? obj.optString("shopName", "") : obj.optString("storeName", "");
             String subtitle = obj.optString("subtitle", "");
@@ -275,6 +255,32 @@ public class SunmiPrinterManager {
             String payment   = obj.optString("paymentMethod", "");
             String footer = obj.optString("footer", "");
             boolean openDrawer = obj.optBoolean("openDrawer", false);
+
+            // 解析後逐欄位 log
+            LogManager.i(TAG, "printPosReceipt parsed shopName=" + shopName);
+            StringBuilder shopCps = new StringBuilder();
+            int sLimit = Math.min(shopName.length(), 20);
+            for (int i = 0; i < sLimit; i++) shopCps.append(Integer.toHexString(shopName.charAt(i))).append(' ');
+            LogManager.i(TAG, "printPosReceipt shopName codepoints(first20)=" + shopCps);
+            LogManager.i(TAG, "printPosReceipt orderNo=" + orderNo + " datetime=" + datetime
+                    + " orderType=" + orderType + " payment=" + payment
+                    + " footer=" + footer + " openDrawer=" + openDrawer);
+
+            JSONArray items = obj.optJSONArray("items");
+            int itemCount = items == null ? 0 : items.length();
+            LogManager.i(TAG, "printPosReceipt items.length=" + itemCount);
+            if (itemCount > 0) {
+                JSONObject it0 = items.getJSONObject(0);
+                String n0 = it0.optString("name", "");
+                int q0 = it0.optInt("qty", 0);
+                double p0 = it0.optDouble("price", 0);
+                String o0 = it0.optString("options", "");
+                LogManager.i(TAG, "printPosReceipt items[0] name=" + n0 + " qty=" + q0 + " price=" + p0 + " options=" + o0);
+                StringBuilder nameCps = new StringBuilder();
+                int nLimit = Math.min(n0.length(), 20);
+                for (int i = 0; i < nLimit; i++) nameCps.append(Integer.toHexString(n0.charAt(i))).append(' ');
+                LogManager.i(TAG, "printPosReceipt items[0].name codepoints(first20)=" + nameCps);
+            }
 
             if (!shopName.isEmpty()) {
                 printerService.setAlignment(1, null);
@@ -291,7 +297,6 @@ public class SunmiPrinterManager {
             if (!payment.isEmpty())   printerService.printText("付款: " + payment + "\n", null);
             printerService.printText("--------------------------------\n", null);
 
-            JSONArray items = obj.optJSONArray("items");
             if (items != null) {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject it = items.getJSONObject(i);
@@ -340,7 +345,6 @@ public class SunmiPrinterManager {
         return printPosReceipt(json);
     }
 
-    /** 舊簽名: title + html 兩參數 */
     public boolean printHtml(String title, String html) {
         if (!isConnected()) {
             settings.recordPrintResult(false, "printer not connected");
@@ -387,9 +391,6 @@ public class SunmiPrinterManager {
         }
     }
 
-    // ===== Hardware control（保留舊簽名）=====
-
-    /** 舊簽名: 回傳 boolean */
     public boolean cutPaper() {
         if (!isConnected()) return false;
         try {
@@ -411,6 +412,8 @@ public class SunmiPrinterManager {
     }
 
     public boolean openCashDrawer() {
+        LogManager.i(TAG, "openCashDrawer ENTRY isConnected=" + isConnected()
+                + " printerService==null? " + (printerService == null));
         if (!isConnected()) {
             LogManager.w(TAG, "openCashDrawer: printer not connected");
             return false;
@@ -424,6 +427,7 @@ public class SunmiPrinterManager {
             try {
                 byte[] raw = new byte[]{0x1B, 0x70, 0x00, 0x19, (byte) 0xFA};
                 printerService.sendRAWData(raw, null);
+                LogManager.i(TAG, "openCashDrawer via RAW ok");
                 return true;
             } catch (Exception ex) {
                 LogManager.e(TAG, "openCashDrawer RAW failed", ex);
@@ -432,7 +436,6 @@ public class SunmiPrinterManager {
         }
     }
 
-    /** 舊簽名: 無參數 */
     public boolean buzzer() {
         return buzzer(2, 100);
     }
@@ -476,8 +479,6 @@ public class SunmiPrinterManager {
             }
         }
     }
-
-    // ===== Retry =====
 
     public interface PrintTask {
         boolean run() throws Exception;
