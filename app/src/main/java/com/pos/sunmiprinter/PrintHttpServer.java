@@ -321,7 +321,7 @@ public class PrintHttpServer extends NanoHTTPD {
         }
     }
 
-       private String readBody(IHTTPSession session) throws IOException, ResponseException {
+           private String readBody(IHTTPSession session) throws IOException, ResponseException {
         Map<String, String> headers = session.getHeaders();
         String ctype = headers.get("content-type");
         if (ctype == null) ctype = headers.get("Content-Type");
@@ -336,7 +336,8 @@ public class PrintHttpServer extends NanoHTTPD {
         }
         LogManager.i(TAG, "readBody content-length=" + contentLength);
 
-        // 直接從 InputStream 讀原始 byte，完全不碰 parseBody（NanoHTTPD parseBody 對 application/json 走 US-ASCII，會把中文變成 ?）
+        // 直接從 InputStream 讀原始 byte，完全不碰 parseBody
+        // (NanoHTTPD parseBody 對 application/octet-stream / application/json 走 US-ASCII，會把中文 byte 變成 ?)
         InputStream is = session.getInputStream();
         if (is != null && contentLength > 0) {
             byte[] buf = new byte[contentLength];
@@ -348,7 +349,7 @@ public class PrintHttpServer extends NanoHTTPD {
             }
             LogManager.i(TAG, "readBody InputStream read=" + read + "/" + contentLength);
 
-            // log 前 40 byte 的 hex（不是 char），確認 byte 層真的有中文 UTF-8
+            // log 前 40 byte 的 hex（驗證 byte 層真的有中文 UTF-8）
             StringBuilder hex = new StringBuilder();
             int hLimit = Math.min(read, 40);
             for (int i = 0; i < hLimit; i++) {
@@ -368,7 +369,7 @@ public class PrintHttpServer extends NanoHTTPD {
             return s;
         }
 
-        // 退路：若 Content-Length 拿不到，才走 parseBody（會壞中文，但至少能跑）
+        // 退路：若 Content-Length 拿不到，才走 parseBody
         LogManager.w(TAG, "readBody fallback to parseBody (no content-length)");
         Map<String, String> files = new HashMap<>();
         try {
@@ -379,6 +380,7 @@ public class PrintHttpServer extends NanoHTTPD {
         String body = files.get("postData");
         return body == null ? "" : body;
     }
+
 
     private Response json(boolean ok, String dataJson, String error) {
         StringBuilder sb = new StringBuilder();
