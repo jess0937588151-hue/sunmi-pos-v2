@@ -131,6 +131,7 @@ public class PrintHttpServer extends NanoHTTPD {
         data.append("\"lastPrintAt\":").append(lastAt).append(",");
         data.append("\"lastPrintOk\":").append(lastOk).append(",");
         data.append("\"lastPrintError\":\"").append(escape(lastErr)).append("\",");
+        data.append("\"token\":\"").append(escape(settings != null ? settings.getApiToken() : "")).append("\",");
         data.append("\"now\":").append(System.currentTimeMillis());
         data.append("}");
         return cors(json(true, data.toString(), null));
