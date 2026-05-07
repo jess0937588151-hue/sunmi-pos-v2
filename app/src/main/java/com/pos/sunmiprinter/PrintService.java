@@ -12,6 +12,7 @@ import android.os.Binder;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.Looper;
 import android.util.Log;
 
@@ -52,7 +53,9 @@ public class PrintService extends Service {
     private AppSettings settings;
     private Handler handler;
 
-   private boolean serverRunning = false;
+  private PowerManager.WakeLock wakeLock;
+
+    private boolean serverRunning = false;
 
     // ==================== 生命週期 ====================
 
@@ -86,7 +89,19 @@ public class PrintService extends Service {
 
         // 啟動 HTTP Server
         startHttpServer();
-    }
+            // 取得 PARTIAL_WAKE_LOCK，避免螢幕關掉時 NanoHTTPD 接收延遲
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PrintService:HttpServerLock");
+                wakeLock.setReferenceCounted(false);
+                wakeLock.acquire();
+                LogManager.i(TAG, "WakeLock acquired");
+            }
+        } catch (Throwable t) {
+            LogManager.w(TAG, "WakeLock acquire failed: " + t.getMessage());
+        }
+
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -116,6 +131,15 @@ public class PrintService extends Service {
         if (sunmiPrinter != null) sunmiPrinter.unbind();
         if (btPrinter != null) btPrinter.disconnect();
         if (netPrinter != null) netPrinter.disconnect();
+                try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+                LogManager.i(TAG, "WakeLock released");
+            }
+        } catch (Throwable t) {
+            LogManager.w(TAG, "WakeLock release failed: " + t.getMessage());
+        }
+
         PrintQueue.shutdown();
         super.onDestroy();
     }
