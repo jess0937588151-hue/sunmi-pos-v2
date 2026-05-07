@@ -62,7 +62,7 @@ public class AppSettings {
     private static final String KEY_FONT_FOOTER   = "font_footer";   // 頁尾
 
     public static final int FONT_MIN = 14;
-    public static final int FONT_MAX = 30;
+    public static final int FONT_MAX = 60;
     public static final int DEFAULT_FONT_STORE    = 30;
     public static final int DEFAULT_FONT_SUBTITLE = 24;
     public static final int DEFAULT_FONT_INFO     = 22;
