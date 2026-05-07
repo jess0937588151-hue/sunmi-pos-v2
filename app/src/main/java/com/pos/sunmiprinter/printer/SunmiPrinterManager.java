@@ -20,6 +20,7 @@ public class SunmiPrinterManager {
     private static final String TAG = "SunmiPrinterManager";
     private static final int MAX_RETRY = 2;
     private static final long RETRY_DELAY = 300;
+    private static final float ITEM_FONT_SIZE = 26f; //  26px
 
     private SunmiPrinterService printerService;
     private final Context context;
@@ -256,7 +257,6 @@ public class SunmiPrinterManager {
             String footer = obj.optString("footer", "");
             boolean openDrawer = obj.optBoolean("openDrawer", false);
 
-            // 解析後逐欄位 log
             LogManager.i(TAG, "printPosReceipt parsed shopName=" + shopName);
             StringBuilder shopCps = new StringBuilder();
             int sLimit = Math.min(shopName.length(), 20);
@@ -291,25 +291,28 @@ public class SunmiPrinterManager {
                 printerService.printTextWithFont(subtitle + "\n", null, 24, null);
             }
             printerService.setAlignment(0, null);
-            if (!orderNo.isEmpty())   printerService.printText("單號: " + orderNo + "\n", null);
-            if (!datetime.isEmpty())  printerService.printText("時間: " + datetime + "\n", null);
-            if (!orderType.isEmpty()) printerService.printText("類型: " + orderType + "\n", null);
-            if (!payment.isEmpty())   printerService.printText("付款: " + payment + "\n", null);
+            if (!orderNo.isEmpty())   printerService.printText(": " + orderNo + "\n", null);
+            if (!datetime.isEmpty())  printerService.printText(": " + datetime + "\n", null);
+            if (!orderType.isEmpty()) printerService.printText(": " + orderType + "\n", null);
+            if (!payment.isEmpty())   printerService.printText(": " + payment + "\n", null);
             printerService.printText("--------------------------------\n", null);
 
+            // ========== 26px  ==========
             if (items != null) {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject it = items.getJSONObject(i);
                     String name = it.optString("name", "");
                     int qty = it.optInt("qty", 1);
                     double price = it.optDouble("price", 0);
-                    String[] cols = new String[]{name, String.valueOf(qty), String.format("%.0f", price)};
-                    int[] widths = new int[]{18, 4, 6};
-                    int[] aligns = new int[]{0, 2, 2};
-                    printerService.printColumnsString(cols, widths, aligns, null);
                     String options = it.optString("options", "");
+
+                    //   "  x   $"  26px 
+                    String mainLine = name + "  x" + qty + "   $" + String.format("%.0f", price);
+                    printerService.printTextWithFont(mainLine + "\n", null, ITEM_FONT_SIZE, null);
+
+                    //  26px 
                     if (!options.isEmpty()) {
-                        printerService.printText("  " + options + "\n", null);
+                        printerService.printTextWithFont("  " + options + "\n", null, ITEM_FONT_SIZE, null);
                     }
                 }
             }
@@ -318,7 +321,7 @@ public class SunmiPrinterManager {
             if (obj.has("total")) {
                 String total = obj.optString("total", "0");
                 printerService.setAlignment(2, null);
-                printerService.printTextWithFont("合計: $" + total + "\n", null, 28, null);
+                printerService.printTextWithFont(": $" + total + "\n", null, 28, null);
                 printerService.setAlignment(0, null);
             }
 
@@ -375,7 +378,7 @@ public class SunmiPrinterManager {
         }
         try {
             printerService.setAlignment(1, null);
-            printerService.printTextWithFont("** 測試列印 **\n", null, 32, null);
+            printerService.printTextWithFont("**  **\n", null, 32, null);
             printerService.setAlignment(0, null);
             printerService.printText("Time: " + new java.util.Date().toString() + "\n", null);
             printerService.printText("APK : Sunmi POS Bridge\n", null);
