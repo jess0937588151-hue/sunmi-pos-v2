@@ -102,7 +102,7 @@ public class PrintService extends Service {
             LogManager.w(TAG, "WakeLock acquire failed: " + t.getMessage());
         }
 
-
+}
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "onStartCommand flags=" + flags);
