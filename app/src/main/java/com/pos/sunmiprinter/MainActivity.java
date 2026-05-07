@@ -252,6 +252,16 @@ private Button btnBatteryWhitelist;
         btnRow3.addView(btnBatteryWhitelist);
         root.addView(btnRow3);
 
+                // 第四排：字體大小設定（v20260608）
+        LinearLayout btnRow4 = horizontal();
+        Button btnFontSize = makeButton("🔤 字體大小設定", COLOR_SECTION);
+        btnFontSize.setOnClickListener(v -> {
+            startActivity(new Intent(MainActivity.this, FontSizeActivity.class));
+        });
+        btnRow4.addView(btnFontSize);
+        root.addView(btnRow4);
+
+
 
         // 底部留白
         android.view.View spacer = new android.view.View(this);
