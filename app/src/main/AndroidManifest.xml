@@ -50,6 +50,14 @@
             android:screenOrientation="landscape"
             android:label="列印服務設定" />
 
+                <!-- 字體大小設定頁 (v20260608) -->
+        <activity
+            android:name=".FontSizeActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="landscape"
+            android:label="字體大小設定" />
+
+
         <!-- 後台列印服務（Foreground Service）-->
         <service
     android:name=".PrintService"
