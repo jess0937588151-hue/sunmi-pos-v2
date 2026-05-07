@@ -9,34 +9,28 @@ import java.util.UUID;
 
 /**
  * 應用程式設定（SharedPreferences）
- * v20260603 新增:
- *   - apiToken: HTTP Server 驗證用 token，首次啟動自動產生 UUID
- *   - lastPrintAt / lastPrintOk / lastPrintError: 最近一次列印狀態，給 /ping 與健康檢查 UI 使用
+ * v20260603 新增: apiToken / lastPrint*
+ * v20260608 新增: 6 組字體大小（14~30 夾值）
  */
 public class AppSettings {
 
     private static final String PREF_NAME = "pos_settings";
 
-    // ===== HTTP Server =====
     public static final int DEFAULT_HTTP_PORT = 8080;
     private static final String KEY_HTTP_PORT = "http_port";
 
-    // ===== API Token (v20260603) =====
     private static final String KEY_API_TOKEN = "api_token";
 
-    // ===== 最近列印狀態 (v20260603) =====
     private static final String KEY_LAST_PRINT_AT = "last_print_at";
     private static final String KEY_LAST_PRINT_OK = "last_print_ok";
     private static final String KEY_LAST_PRINT_ERROR = "last_print_error";
 
-    // ===== Sunmi 內建印表機 =====
     private static final String KEY_SUNMI_ENABLED = "sunmi_enabled";
     private static final String KEY_SUNMI_AUTO_CUT = "sunmi_auto_cut";
     private static final String KEY_SUNMI_AUTO_DRAWER = "sunmi_auto_drawer";
     private static final String KEY_SUNMI_BUZZER = "sunmi_buzzer";
     private static final String KEY_SUNMI_ROLE = "sunmi_role";
 
-    // ===== 藍牙印表機 =====
     private static final String KEY_BT_ENABLED = "bt_enabled";
     private static final String KEY_BT_ADDRESS = "bt_address";
     private static final String KEY_BT_NAME = "bt_name";
@@ -45,7 +39,6 @@ public class AppSettings {
     private static final String KEY_BT_BUZZER = "bt_buzzer";
     private static final String KEY_BT_ROLE = "bt_role";
 
-    // ===== 網路印表機 =====
     private static final String KEY_NET_ENABLED = "net_enabled";
     private static final String KEY_NET_IP = "net_ip";
     private static final String KEY_NET_PORT = "net_port";
@@ -54,29 +47,42 @@ public class AppSettings {
     private static final String KEY_NET_BUZZER = "net_buzzer";
     private static final String KEY_NET_ROLE = "net_role";
 
-    // ===== 收據設定 =====
     private static final String KEY_STORE_NAME = "store_name";
     private static final String KEY_STORE_PHONE = "store_phone";
     private static final String KEY_STORE_ADDRESS = "store_address";
     private static final String KEY_RECEIPT_FOOTER = "receipt_footer";
     private static final String KEY_PRINT_COPIES = "print_copies";
 
+    // ===== v20260608: 字體大小（6 組） =====
+    private static final String KEY_FONT_STORE    = "font_store";    // 店名
+    private static final String KEY_FONT_SUBTITLE = "font_subtitle"; // 副標
+    private static final String KEY_FONT_INFO     = "font_info";     // 訂單資訊（單號/時間/類型/付款/分隔線）
+    private static final String KEY_FONT_ITEM     = "font_item";     // 品項+選項
+    private static final String KEY_FONT_TOTAL    = "font_total";    // 總額
+    private static final String KEY_FONT_FOOTER   = "font_footer";   // 頁尾
+
+    public static final int FONT_MIN = 14;
+    public static final int FONT_MAX = 30;
+    public static final int DEFAULT_FONT_STORE    = 30;
+    public static final int DEFAULT_FONT_SUBTITLE = 24;
+    public static final int DEFAULT_FONT_INFO     = 22;
+    public static final int DEFAULT_FONT_ITEM     = 26;
+    public static final int DEFAULT_FONT_TOTAL    = 28;
+    public static final int DEFAULT_FONT_FOOTER   = 22;
+
     private final SharedPreferences sp;
 
     public AppSettings(Context ctx) {
         sp = ctx.getApplicationContext().getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-        // 第一次啟動自動產生 token
         if (!sp.contains(KEY_API_TOKEN)) {
             String token = UUID.randomUUID().toString().replace("-", "");
             sp.edit().putString(KEY_API_TOKEN, token).apply();
         }
     }
 
-    // ===== HTTP =====
     public int getHttpPort() { return sp.getInt(KEY_HTTP_PORT, DEFAULT_HTTP_PORT); }
     public void setHttpPort(int v) { sp.edit().putInt(KEY_HTTP_PORT, v).apply(); }
 
-    // ===== API Token =====
     public String getApiToken() { return sp.getString(KEY_API_TOKEN, ""); }
     public void setApiToken(String v) { sp.edit().putString(KEY_API_TOKEN, v == null ? "" : v).apply(); }
     public void regenerateApiToken() {
@@ -84,7 +90,6 @@ public class AppSettings {
         sp.edit().putString(KEY_API_TOKEN, token).apply();
     }
 
-    // ===== 最近列印狀態 =====
     public long getLastPrintAt() { return sp.getLong(KEY_LAST_PRINT_AT, 0L); }
     public boolean getLastPrintOk() { return sp.getBoolean(KEY_LAST_PRINT_OK, true); }
     public String getLastPrintError() { return sp.getString(KEY_LAST_PRINT_ERROR, ""); }
@@ -96,7 +101,6 @@ public class AppSettings {
                 .apply();
     }
 
-    // ===== Sunmi =====
     public boolean isSunmiEnabled() { return sp.getBoolean(KEY_SUNMI_ENABLED, true); }
     public void setSunmiEnabled(boolean v) { sp.edit().putBoolean(KEY_SUNMI_ENABLED, v).apply(); }
     public boolean isSunmiAutoCut() { return sp.getBoolean(KEY_SUNMI_AUTO_CUT, true); }
@@ -108,7 +112,6 @@ public class AppSettings {
     public String getSunmiRole() { return sp.getString(KEY_SUNMI_ROLE, "receipt"); }
     public void setSunmiRole(String v) { sp.edit().putString(KEY_SUNMI_ROLE, v).apply(); }
 
-    // ===== Bluetooth =====
     public boolean isBtEnabled() { return sp.getBoolean(KEY_BT_ENABLED, false); }
     public void setBtEnabled(boolean v) { sp.edit().putBoolean(KEY_BT_ENABLED, v).apply(); }
     public String getBtAddress() { return sp.getString(KEY_BT_ADDRESS, ""); }
@@ -124,7 +127,6 @@ public class AppSettings {
     public String getBtRole() { return sp.getString(KEY_BT_ROLE, "kitchen"); }
     public void setBtRole(String v) { sp.edit().putString(KEY_BT_ROLE, v).apply(); }
 
-    // ===== Network =====
     public boolean isNetEnabled() { return sp.getBoolean(KEY_NET_ENABLED, false); }
     public void setNetEnabled(boolean v) { sp.edit().putBoolean(KEY_NET_ENABLED, v).apply(); }
     public String getNetIp() { return sp.getString(KEY_NET_IP, ""); }
@@ -140,7 +142,6 @@ public class AppSettings {
     public String getNetRole() { return sp.getString(KEY_NET_ROLE, "label"); }
     public void setNetRole(String v) { sp.edit().putString(KEY_NET_ROLE, v).apply(); }
 
-    // ===== Receipt =====
     public String getStoreName() { return sp.getString(KEY_STORE_NAME, ""); }
     public void setStoreName(String v) { sp.edit().putString(KEY_STORE_NAME, v).apply(); }
     public String getStorePhone() { return sp.getString(KEY_STORE_PHONE, ""); }
@@ -152,7 +153,35 @@ public class AppSettings {
     public int getPrintCopies() { return sp.getInt(KEY_PRINT_COPIES, 1); }
     public void setPrintCopies(int v) { sp.edit().putInt(KEY_PRINT_COPIES, v).apply(); }
 
-    // ===== JSON =====
+    // ===== v20260608: 字體大小 =====
+    private int clampFont(int v) {
+        if (v < FONT_MIN) return FONT_MIN;
+        if (v > FONT_MAX) return FONT_MAX;
+        return v;
+    }
+    public int getFontStore()    { return clampFont(sp.getInt(KEY_FONT_STORE,    DEFAULT_FONT_STORE)); }
+    public int getFontSubtitle() { return clampFont(sp.getInt(KEY_FONT_SUBTITLE, DEFAULT_FONT_SUBTITLE)); }
+    public int getFontInfo()     { return clampFont(sp.getInt(KEY_FONT_INFO,     DEFAULT_FONT_INFO)); }
+    public int getFontItem()     { return clampFont(sp.getInt(KEY_FONT_ITEM,     DEFAULT_FONT_ITEM)); }
+    public int getFontTotal()    { return clampFont(sp.getInt(KEY_FONT_TOTAL,    DEFAULT_FONT_TOTAL)); }
+    public int getFontFooter()   { return clampFont(sp.getInt(KEY_FONT_FOOTER,   DEFAULT_FONT_FOOTER)); }
+    public void setFontStore(int v)    { sp.edit().putInt(KEY_FONT_STORE,    clampFont(v)).apply(); }
+    public void setFontSubtitle(int v) { sp.edit().putInt(KEY_FONT_SUBTITLE, clampFont(v)).apply(); }
+    public void setFontInfo(int v)     { sp.edit().putInt(KEY_FONT_INFO,     clampFont(v)).apply(); }
+    public void setFontItem(int v)     { sp.edit().putInt(KEY_FONT_ITEM,     clampFont(v)).apply(); }
+    public void setFontTotal(int v)    { sp.edit().putInt(KEY_FONT_TOTAL,    clampFont(v)).apply(); }
+    public void setFontFooter(int v)   { sp.edit().putInt(KEY_FONT_FOOTER,   clampFont(v)).apply(); }
+    public void resetFontDefaults() {
+        sp.edit()
+                .putInt(KEY_FONT_STORE,    DEFAULT_FONT_STORE)
+                .putInt(KEY_FONT_SUBTITLE, DEFAULT_FONT_SUBTITLE)
+                .putInt(KEY_FONT_INFO,     DEFAULT_FONT_INFO)
+                .putInt(KEY_FONT_ITEM,     DEFAULT_FONT_ITEM)
+                .putInt(KEY_FONT_TOTAL,    DEFAULT_FONT_TOTAL)
+                .putInt(KEY_FONT_FOOTER,   DEFAULT_FONT_FOOTER)
+                .apply();
+    }
+
     public String toJson() {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
@@ -184,7 +213,13 @@ public class AppSettings {
         sb.append("\"storePhone\":\"").append(escape(getStorePhone())).append("\",");
         sb.append("\"storeAddress\":\"").append(escape(getStoreAddress())).append("\",");
         sb.append("\"receiptFooter\":\"").append(escape(getReceiptFooter())).append("\",");
-        sb.append("\"printCopies\":").append(getPrintCopies());
+        sb.append("\"printCopies\":").append(getPrintCopies()).append(",");
+        sb.append("\"fontStore\":").append(getFontStore()).append(",");
+        sb.append("\"fontSubtitle\":").append(getFontSubtitle()).append(",");
+        sb.append("\"fontInfo\":").append(getFontInfo()).append(",");
+        sb.append("\"fontItem\":").append(getFontItem()).append(",");
+        sb.append("\"fontTotal\":").append(getFontTotal()).append(",");
+        sb.append("\"fontFooter\":").append(getFontFooter());
         sb.append("}");
         return sb.toString();
     }
@@ -218,12 +253,17 @@ public class AppSettings {
             if (o.has("storeAddress")) setStoreAddress(o.getString("storeAddress"));
             if (o.has("receiptFooter")) setReceiptFooter(o.getString("receiptFooter"));
             if (o.has("printCopies")) setPrintCopies(o.getInt("printCopies"));
+            if (o.has("fontStore")) setFontStore(o.getInt("fontStore"));
+            if (o.has("fontSubtitle")) setFontSubtitle(o.getInt("fontSubtitle"));
+            if (o.has("fontInfo")) setFontInfo(o.getInt("fontInfo"));
+            if (o.has("fontItem")) setFontItem(o.getInt("fontItem"));
+            if (o.has("fontTotal")) setFontTotal(o.getInt("fontTotal"));
+            if (o.has("fontFooter")) setFontFooter(o.getInt("fontFooter"));
         } catch (Exception ignored) {}
     }
 
     public void resetAll() {
         sp.edit().clear().apply();
-        // 重新產生 token
         regenerateApiToken();
     }
 
