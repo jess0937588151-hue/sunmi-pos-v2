@@ -125,6 +125,14 @@ public class PrintHttpServer extends NanoHTTPD {
         data.append("\"bluetoothConnected\":").append(btConn).append(",");
         data.append("\"networkConnected\":").append(netConn).append(",");
 
+        // printerReady = web detect 
+        boolean printerReady = info.connected
+                && !info.paperOut && !info.coverOpen
+                && !info.overheat && !info.cutterError;
+        boolean anyReady = printerReady || btConn || netConn;
+        data.append("\"printerReady\":").append(printerReady).append(",");
+        data.append("\"anyPrinterReady\":").append(anyReady).append(",");
+
         long lastAt = settings != null ? settings.getLastPrintAt() : 0L;
         boolean lastOk = settings == null || settings.getLastPrintOk();
         String lastErr = settings != null ? settings.getLastPrintError() : "";
@@ -193,20 +201,20 @@ public class PrintHttpServer extends NanoHTTPD {
     private Response handleTestPage() {
         String token = settings != null ? settings.getApiToken() : "";
         String html = "<!doctype html><html><head><meta charset='utf-8'>"
-                + "<title>POS 列印橋接測試</title>"
+                + "<title>POS </title>"
                 + "<style>body{font-family:sans-serif;padding:20px;font-size:16px}"
                 + "button{padding:12px 18px;margin:6px;font-size:16px}"
                 + "pre{background:#f4f4f4;padding:10px;white-space:pre-wrap;word-break:break-all}</style>"
                 + "</head><body>"
-                + "<h2>POS 列印橋接測試</h2>"
-                + "<p>APK 版本: <b>" + getApkVersion() + "</b></p>"
+                + "<h2>POS </h2>"
+                + "<p>APK : <b>" + getApkVersion() + "</b></p>"
                 + "<p>API Token: <code>" + escape(token) + "</code></p>"
                 + "<button onclick=\"call('/ping','GET')\">Ping</button>"
-                + "<button onclick=\"call('/printer/status','GET')\">印表機狀態</button>"
-                + "<button onclick=\"testPrint()\">測試列印</button>"
-                + "<button onclick=\"openDrawer()\">開錢箱</button>"
-                + "<button onclick=\"call('/logs?lines=80','GET')\">最近日誌</button>"
-                + "<pre id='out'>(尚未呼叫)</pre>"
+                + "<button onclick=\"call('/printer/status','GET')\"></button>"
+                + "<button onclick=\"testPrint()\"></button>"
+                + "<button onclick=\"openDrawer()\"></button>"
+                + "<button onclick=\"call('/logs?lines=80','GET')\"></button>"
+                + "<pre id='out'>()</pre>"
                 + "<script>"
                 + "var TOKEN='" + escape(token) + "';"
                 + "function show(o){document.getElementById('out').textContent=typeof o==='string'?o:JSON.stringify(o,null,2);}"
@@ -214,9 +222,9 @@ public class PrintHttpServer extends NanoHTTPD {
                 + "x.setRequestHeader('X-API-Token',TOKEN);"
                 + "if(b)x.setRequestHeader('Content-Type','application/json');"
                 + "x.onload=function(){show(x.responseText);};"
-                + "x.onerror=function(){show('連線失敗');};"
+                + "x.onerror=function(){show('');};"
                 + "x.send(b||null);}"
-                + "function testPrint(){call('/print/sunmi','POST',JSON.stringify({shopName:'測試店',orderNumber:'T001',dateTime:new Date().toLocaleString(),items:[{name:'測試商品',qty:1,price:100}],total:'100'}));}"
+                + "function testPrint(){call('/print/sunmi','POST',JSON.stringify({shopName:'',orderNumber:'T001',dateTime:new Date().toLocaleString(),items:[{name:'',qty:1,price:100}],total:'100'}));}"
                 + "function openDrawer(){call('/drawer/open','POST','{}');}"
                 + "</script></body></html>";
         Response r = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html);
@@ -313,8 +321,11 @@ public class PrintHttpServer extends NanoHTTPD {
                 }
                 return result[0];
             });
-            LogManager.i(TAG, "handleDrawerOpen DONE via=" + viaArr[0] + " ok=" + result[0]);
-            return cors(json(result[0], "{\"via\":\"" + viaArr[0] + "\"}",
+            String responseJson = "{\"via\":\"" + viaArr[0] + "\"}";
+            LogManager.i(TAG, "handleDrawerOpen DONE via=" + viaArr[0] + " ok=" + result[0]
+                    + " response={\"ok\":" + result[0] + ",\"data\":" + responseJson
+                    + ",\"error\":" + (result[0] ? "null" : "\"no available printer\"") + "}");
+            return cors(json(result[0], responseJson,
                     result[0] ? null : "no available printer"));
         } catch (Exception e) {
             LogManager.e(TAG, "handleDrawerOpen failed", e);
@@ -328,7 +339,6 @@ public class PrintHttpServer extends NanoHTTPD {
         if (ctype == null) ctype = headers.get("Content-Type");
         LogManager.i(TAG, "readBody content-type=" + ctype);
 
-        // 從 header 取 Content-Length
         int contentLength = 0;
         String cl = headers.get("content-length");
         if (cl == null) cl = headers.get("Content-Length");
@@ -337,8 +347,6 @@ public class PrintHttpServer extends NanoHTTPD {
         }
         LogManager.i(TAG, "readBody content-length=" + contentLength);
 
-        // 直接從 InputStream 讀原始 byte，完全不碰 parseBody
-        // (NanoHTTPD parseBody 對 application/octet-stream / application/json 走 US-ASCII，會把中文 byte 變成 ?)
         InputStream is = session.getInputStream();
         if (is != null && contentLength > 0) {
             byte[] buf = new byte[contentLength];
@@ -350,7 +358,6 @@ public class PrintHttpServer extends NanoHTTPD {
             }
             LogManager.i(TAG, "readBody InputStream read=" + read + "/" + contentLength);
 
-            // log 前 40 byte 的 hex（驗證 byte 層真的有中文 UTF-8）
             StringBuilder hex = new StringBuilder();
             int hLimit = Math.min(read, 40);
             for (int i = 0; i < hLimit; i++) {
@@ -370,7 +377,6 @@ public class PrintHttpServer extends NanoHTTPD {
             return s;
         }
 
-        // 退路：若 Content-Length 拿不到，才走 parseBody
         LogManager.w(TAG, "readBody fallback to parseBody (no content-length)");
         Map<String, String> files = new HashMap<>();
         try {
@@ -401,6 +407,7 @@ public class PrintHttpServer extends NanoHTTPD {
         r.addHeader("Access-Control-Allow-Origin", "*");
         r.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         r.addHeader("Access-Control-Allow-Headers", "Content-Type, X-API-Token");
+        r.addHeader("Access-Control-Allow-Private-Network", "true");
         r.addHeader("Access-Control-Max-Age", "86400");
         return r;
     }
@@ -412,7 +419,7 @@ public class PrintHttpServer extends NanoHTTPD {
     }
 
     private String getApkVersion() {
-        return "v20260606-debug";
+        return "v20260607-debug";
     }
 
     @SuppressWarnings("unused")
