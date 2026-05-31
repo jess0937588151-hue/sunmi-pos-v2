@@ -20,11 +20,14 @@ public class SunmiPrinterManager {
     private static final String TAG = "SunmiPrinterManager";
     private static final int MAX_RETRY = 2;
     private static final long RETRY_DELAY = 300;
+    // v20260531: 列印前若未連線，自動 rebind 並等待這麼久（毫秒）
+    private static final long RECONNECT_WAIT_MS = 1500;
+    private static final long RECONNECT_POLL_MS = 100;
 
     private SunmiPrinterService printerService;
     private final Context context;
     private final AppSettings settings;
-    private boolean bound = false;
+    private volatile boolean bound = false;
 
     private final InnerPrinterCallback callback = new InnerPrinterCallback() {
         @Override
@@ -69,6 +72,38 @@ public class SunmiPrinterManager {
 
     public boolean isConnected() {
         return bound && printerService != null;
+    }
+
+    /**
+     * v20260531: 列印前呼叫。若未連線，主動 rebind 並輪詢等待最多 RECONNECT_WAIT_MS。
+     * Android 7.1 在背景被回收 binder 後 isConnected() 可能短暫為 false，
+     * 或 callback 尚未回來，這裡給它一點時間重新接上，避免「明明開著卻印不出」。
+     */
+    private boolean ensureConnected() {
+        if (isConnected()) {
+            // 進一步確認 service 真的活著（呼叫狀態查詢，死掉會丟 RemoteException）
+            try {
+                printerService.updatePrinterState();
+                return true;
+            } catch (Throwable t) {
+                LogManager.w(TAG, "ensureConnected: service stale, will rebind", t);
+                bound = false;
+                printerService = null;
+            }
+        }
+        LogManager.i(TAG, "ensureConnected: not connected, rebind...");
+        bind();
+        long waited = 0;
+        while (waited < RECONNECT_WAIT_MS) {
+            if (isConnected()) {
+                LogManager.i(TAG, "ensureConnected: reconnected after " + waited + "ms");
+                return true;
+            }
+            try { Thread.sleep(RECONNECT_POLL_MS); } catch (InterruptedException ignored) {}
+            waited += RECONNECT_POLL_MS;
+        }
+        LogManager.w(TAG, "ensureConnected: still not connected after " + RECONNECT_WAIT_MS + "ms");
+        return isConnected();
     }
 
     public int getPrinterStatus() {
@@ -118,7 +153,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printText(String text) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -134,7 +169,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printTextWithFont(String text, String typeface, float fontSize) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -150,7 +185,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printColumns(String[] colsText, int[] colsWidth, int[] colsAlign) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -166,7 +201,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printBitmap(Bitmap bmp) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -182,7 +217,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printBarcode(String data, int symbology, int height, int width, int textPos) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -198,7 +233,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printQRCode(String data, int moduleSize, int errorLevel) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -214,7 +249,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printReceipt(String title, String body) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -241,8 +276,19 @@ public class SunmiPrinterManager {
         return b == null ? "" : b;
     }
 
-    public boolean printPosReceipt(String json) {
-        if (!isConnected()) {
+    /**
+     * v20260531: 列印單據主入口。整段包進 retry()，列印前 ensureConnected()。
+     * 排版改用「數量在前 + 欄位對齊」：
+     *   - 品項主行 = [數量欄 x1][品名欄]，數量靠左固定寬、品名自動折行
+     *   - 選項每行一個、明顯縮排
+     *   - 廚房單(mode=kitchen)品名套 fontKitchenItem、選項/資訊套 fontKitchenInfo
+     */
+    public boolean printPosReceipt(final String json) {
+        return retry(() -> doPrintPosReceipt(json));
+    }
+
+    private boolean doPrintPosReceipt(String json) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             LogManager.e(TAG, "printPosReceipt: printer not connected");
             return false;
@@ -251,19 +297,27 @@ public class SunmiPrinterManager {
             String head = json == null ? "(null)" : (json.length() > 200 ? json.substring(0, 200) : json);
             LogManager.i(TAG, "printPosReceipt ENTRY len=" + (json == null ? -1 : json.length()) + " head=" + head);
 
+            JSONObject obj = new JSONObject(json);
+            String mode = obj.optString("mode", "receipt");
+            boolean isKitchen = "kitchen".equals(mode);
+
+            // 顧客單字級
             float fStore    = settings.getFontStore();
             float fSubtitle = settings.getFontSubtitle();
             float fInfo     = settings.getFontInfo();
             float fItem     = settings.getFontItem();
             float fTotal    = settings.getFontTotal();
             float fFooter   = settings.getFontFooter();
-            LogManager.i(TAG, "printPosReceipt fonts store=" + fStore + " subtitle=" + fSubtitle
-                    + " info=" + fInfo + " item=" + fItem + " total=" + fTotal + " footer=" + fFooter);
+            // 廚房單字級（可在設定頁調整）
+            float fKItem = settings.getFontKitchenItem();
+            float fKInfo = settings.getFontKitchenInfo();
+            // 本次實際採用：廚房單品名用 fKItem、資訊/選項用 fKInfo
+            float useItemFont = isKitchen ? fKItem : fItem;
+            float useInfoFont = isKitchen ? fKInfo : fInfo;
+            LogManager.i(TAG, "printPosReceipt mode=" + mode + " isKitchen=" + isKitchen
+                    + " useItemFont=" + useItemFont + " useInfoFont=" + useInfoFont);
 
-            JSONObject obj = new JSONObject(json);
-            String mode = obj.optString("mode", "receipt");
-
-            // ---  web/APK  key fallback ---
+            // --- web/APK key fallback ---
             String shopName     = firstNonEmpty(obj.optString("shopName", ""),     obj.optString("storeName", ""));
             String storePhone   = firstNonEmpty(obj.optString("shopPhone", ""),    obj.optString("storePhone", ""));
             String storeAddress = firstNonEmpty(obj.optString("shopAddress", ""),  obj.optString("storeAddress", ""));
@@ -273,7 +327,6 @@ public class SunmiPrinterManager {
             String orderType    = obj.optString("orderType", "");
             String payment      = firstNonEmpty(obj.optString("paymentMethod", ""), obj.optString("payment", ""));
 
-            //  customerInfo customerName + customerPhoneMasked  customerInfo
             String customerName  = obj.optString("customerName", "");
             String customerPhone = obj.optString("customerPhoneMasked", "");
             String customerInfo  = obj.optString("customerInfo", "");
@@ -292,35 +345,13 @@ public class SunmiPrinterManager {
             String footer       = obj.optString("footer", "");
             boolean openDrawer  = obj.optBoolean("openDrawer", false);
 
-            //  / 
             String subtotalStr = obj.has("subtotal") ? obj.optString("subtotal", "")
                               : (obj.has("subtotalAmount") ? obj.optString("subtotalAmount", "") : "");
             String discountStr = obj.has("discountAmount") ? obj.optString("discountAmount", "")
                               : (obj.has("discount") ? obj.optString("discount", "") : "");
             String totalStr    = obj.optString("total", "");
 
-            // ---  RAW  ---
-            LogManager.i(TAG, "printPosReceipt RAW mode=" + mode
-                    + " shopName=[" + shopName + "]"
-                    + " shopPhone=[" + storePhone + "]"
-                    + " shopAddress=[" + storeAddress + "]"
-                    + " subtitle=[" + subtitle + "]"
-                    + " orderNo=[" + orderNo + "]"
-                    + " dateTime=[" + datetime + "]"
-                    + " orderType=[" + orderType + "]"
-                    + " payment=[" + payment + "]"
-                    + " customerName=[" + customerName + "]"
-                    + " customerPhone=[" + customerPhone + "]"
-                    + " customerInfoMerged=[" + customerInfo + "]"
-                    + " customerNote=[" + customerNote + "]"
-                    + " orderNote=[" + orderNote + "]"
-                    + " subtotal=[" + subtotalStr + "]"
-                    + " discount=[" + discountStr + "]"
-                    + " total=[" + totalStr + "]"
-                    + " footer=[" + footer + "]"
-                    + " openDrawer=" + openDrawer);
-
-            // ---  fields obj.optBoolean ---
+            // --- fields ---
             JSONObject fields = obj.optJSONObject("fields");
             boolean fStoreName    = fields == null || fields.optBoolean("storeName",      true);
             boolean fStorePhone   = fields == null || fields.optBoolean("storePhone",     true);
@@ -343,69 +374,48 @@ public class SunmiPrinterManager {
             boolean fTotalLine    = fields == null || fields.optBoolean("total",          true);
             boolean fFooterOn     = fields == null || fields.optBoolean("footer",         true);
 
-            LogManager.i(TAG, "printPosReceipt FIELDS mode=" + mode
-                    + " storeName=" + fStoreName + " storePhone=" + fStorePhone
-                    + " storeAddress=" + fStoreAddress + " subtitle=" + fSubtitleOn
-                    + " orderNo=" + fOrderNo + " dateTime=" + fDatetime
-                    + " orderType=" + fOrderType + " paymentMethod=" + fPayment
-                    + " customerInfo=" + fCustomerInfo + " customerNote=" + fCustomerNote
-                    + " items=" + fItemsOn + " itemQty=" + fItemQty + " itemPrice=" + fItemPrice
-                    + " itemSelections=" + fItemSel + " itemNote=" + fItemNote
-                    + " orderNote=" + fOrderNote + " subtotal=" + fSubtotal
-                    + " discount=" + fDiscount + " total=" + fTotalLine + " footer=" + fFooterOn);
-
             JSONArray items = obj.optJSONArray("items");
-            int itemCount = items == null ? 0 : items.length();
-            LogManager.i(TAG, "printPosReceipt ITEMS count=" + itemCount);
-            if (items != null) {
-                for (int i = 0; i < items.length(); i++) {
-                    JSONObject it = items.optJSONObject(i);
-                    if (it == null) continue;
-                    String iName = it.optString("name", "");
-                    int iQty = it.optInt("qty", 1);
-                    double iPrice = it.optDouble("price", 0);
-                    //  selections options
-                    String iSel = it.has("selections") ? it.optString("selections", "")
-                                : it.optString("options", "");
-                    String iNote = it.optString("note", "");
-                    LogManager.i(TAG, "printPosReceipt ITEM[" + i + "] name=[" + iName
-                            + "] qty=" + iQty + " price=" + iPrice
-                            + " selections=[" + iSel + "] note=[" + iNote + "]");
-                }
-            }
 
-            // 
-            if (fStoreName && !shopName.isEmpty()) {
+            // ===== 表頭（店名/副標）=====
+            if (!isKitchen) {
+                if (fStoreName && !shopName.isEmpty()) {
+                    printerService.setAlignment(1, null);
+                    printerService.printTextWithFont(shopName + "\n", null, fStore, null);
+                }
+                if (fStorePhone && !storePhone.isEmpty()) {
+                    printerService.setAlignment(1, null);
+                    printerService.printTextWithFont(storePhone + "\n", null, fSubtitle, null);
+                }
+                if (fStoreAddress && !storeAddress.isEmpty()) {
+                    printerService.setAlignment(1, null);
+                    printerService.printTextWithFont(storeAddress + "\n", null, fSubtitle, null);
+                }
+                if (fSubtitleOn && !subtitle.isEmpty()) {
+                    printerService.setAlignment(1, null);
+                    printerService.printTextWithFont(subtitle + "\n", null, fSubtitle, null);
+                }
+            } else {
+                // 廚房單：置中大標題
                 printerService.setAlignment(1, null);
-                printerService.printTextWithFont(shopName + "\n", null, fStore, null);
-            }
-            if (fStorePhone && !storePhone.isEmpty()) {
-                printerService.setAlignment(1, null);
-                printerService.printTextWithFont(storePhone + "\n", null, fSubtitle, null);
-            }
-            if (fStoreAddress && !storeAddress.isEmpty()) {
-                printerService.setAlignment(1, null);
-                printerService.printTextWithFont(storeAddress + "\n", null, fSubtitle, null);
-            }
-            if (fSubtitleOn && !subtitle.isEmpty()) {
-                printerService.setAlignment(1, null);
-                printerService.printTextWithFont(subtitle + "\n", null, fSubtitle, null);
+                printerService.printTextWithFont("** 廚房單 **\n", null, fKInfo, null);
             }
             printerService.setAlignment(0, null);
 
-            // 
+            // ===== 訂單資訊 =====
             boolean printedAnyHeader = false;
-            if (fOrderNo   && !orderNo.isEmpty())   { printerService.printTextWithFont(": " + orderNo + "\n",  null, fInfo, null); printedAnyHeader = true; }
-            if (fDatetime  && !datetime.isEmpty())  { printerService.printTextWithFont(": " + datetime + "\n", null, fInfo, null); printedAnyHeader = true; }
-            if (fOrderType && !orderType.isEmpty()) { printerService.printTextWithFont(": " + orderType + "\n", null, fInfo, null); printedAnyHeader = true; }
-            if (fPayment   && !payment.isEmpty())   { printerService.printTextWithFont(": " + payment + "\n",  null, fInfo, null); printedAnyHeader = true; }
-            if (fCustomerInfo && !customerInfo.isEmpty()) { printerService.printTextWithFont(": " + customerInfo + "\n", null, fInfo, null); printedAnyHeader = true; }
-            if (fCustomerNote && !customerNote.isEmpty()) { printerService.printTextWithFont(": " + customerNote + "\n", null, fInfo, null); printedAnyHeader = true; }
+            if (fOrderNo   && !orderNo.isEmpty())   { printerService.printTextWithFont("單號 " + orderNo + "\n",  null, useInfoFont, null); printedAnyHeader = true; }
+            if (fDatetime  && !datetime.isEmpty())  { printerService.printTextWithFont("時間 " + datetime + "\n", null, useInfoFont, null); printedAnyHeader = true; }
+            if (fOrderType && !orderType.isEmpty()) { printerService.printTextWithFont("類型 " + orderType + "\n", null, useInfoFont, null); printedAnyHeader = true; }
+            if (!isKitchen) {
+                if (fPayment   && !payment.isEmpty())   { printerService.printTextWithFont("付款 " + payment + "\n",  null, useInfoFont, null); printedAnyHeader = true; }
+                if (fCustomerInfo && !customerInfo.isEmpty()) { printerService.printTextWithFont("顧客 " + customerInfo + "\n", null, useInfoFont, null); printedAnyHeader = true; }
+            }
+            if (fCustomerNote && !customerNote.isEmpty()) { printerService.printTextWithFont("備註 " + customerNote + "\n", null, useInfoFont, null); printedAnyHeader = true; }
             if (printedAnyHeader) {
-                printerService.printTextWithFont("--------------------------------\n", null, fInfo, null);
+                printerService.printTextWithFont("--------------------------------\n", null, useInfoFont, null);
             }
 
-            // 
+            // ===== 品項（數量在前、欄位對齊）=====
             if (fItemsOn && items != null && items.length() > 0) {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject it = items.getJSONObject(i);
@@ -416,60 +426,85 @@ public class SunmiPrinterManager {
                                       : it.optString("options", "");
                     String note = it.optString("note", "");
 
-                    StringBuilder mainLine = new StringBuilder();
-                    if (!name.isEmpty()) mainLine.append(name);
-                    if (fItemQty)        mainLine.append("  x").append(qty);
-                    if (fItemPrice) {
-                        if (mainLine.length() > 0) mainLine.append("   ");
-                        mainLine.append("$").append(String.format("%.0f", price));
+                    // 主行：數量在前。用 printColumnsString 對齊：
+                    //   廚房單 = [數量][品名]（不印價格）
+                    //   顧客單 = [數量][品名][價格]
+                    String qtyCol = fItemQty ? ("x" + qty) : "";
+                    if (isKitchen) {
+                        // 兩欄：數量 4、品名其餘（28 字總寬，數量靠左、品名靠左、品名欄會自動折行）
+                        String[] cols = { qtyCol, name };
+                        int[] widths  = { 4, 24 };
+                        int[] aligns  = { 0, 0 }; // 0=左 1=中 2=右
+                        printerService.setAlignment(0, null);
+                        // 廚房單品名要大字：printColumnsString 不吃字級，改用 setFontSize（部分機型支援）+ fallback
+                        try { printerService.setFontSize(useItemFont, null); } catch (Throwable ignore) {}
+                        printerService.printColumnsString(cols, widths, aligns, null);
+                        try { printerService.setFontSize(useInfoFont, null); } catch (Throwable ignore) {}
+                    } else {
+                        // 顧客單三欄：數量 4、品名 18、價格 10（靠右）
+                        String priceCol = fItemPrice ? ("$" + String.format("%.0f", price)) : "";
+                        String[] cols = { qtyCol, name, priceCol };
+                        int[] widths  = { 4, 18, 10 };
+                        int[] aligns  = { 0, 0, 2 };
+                        printerService.setAlignment(0, null);
+                        try { printerService.setFontSize(useItemFont, null); } catch (Throwable ignore) {}
+                        printerService.printColumnsString(cols, widths, aligns, null);
+                        try { printerService.setFontSize(useInfoFont, null); } catch (Throwable ignore) {}
                     }
-                    if (mainLine.length() > 0) {
-                        printerService.printTextWithFont(mainLine.toString() + "\n", null, fItem, null);
-                    }
+
+                    // 選項：每行一個、明顯縮排（用較小字級，廚房單用 fKInfo）
                     if (fItemSel && !selections.isEmpty()) {
-                        printerService.printTextWithFont("  " + selections + "\n", null, fItem, null);
+                        // selections 可能是用 / 或 , 或 ; 分隔的多個，逐一拆開各印一行
+                        String[] parts = selections.split("\\s*[/,;、]\\s*");
+                        for (String p : parts) {
+                            String t = p == null ? "" : p.trim();
+                            if (t.isEmpty()) continue;
+                            printerService.printTextWithFont("    - " + t + "\n", null, useInfoFont, null);
+                        }
                     }
                     if (fItemNote && !note.isEmpty()) {
-                        printerService.printTextWithFont("  : " + note + "\n", null, fItem, null);
+                        printerService.printTextWithFont("    備註: " + note + "\n", null, useInfoFont, null);
                     }
                 }
-                printerService.printTextWithFont("--------------------------------\n", null, fInfo, null);
+                printerService.printTextWithFont("--------------------------------\n", null, useInfoFont, null);
             }
 
-            // 
+            // ===== 整單備註 =====
             if (fOrderNote && !orderNote.isEmpty()) {
-                printerService.printTextWithFont(": " + orderNote + "\n", null, fInfo, null);
+                printerService.printTextWithFont("整單備註 " + orderNote + "\n", null, useInfoFont, null);
             }
 
-            //  / / 
-            if (fSubtotal && !subtotalStr.isEmpty()) {
-                printerService.setAlignment(2, null);
-                printerService.printTextWithFont(": $" + subtotalStr + "\n", null, fInfo, null);
-                printerService.setAlignment(0, null);
-            }
-            if (fDiscount && !discountStr.isEmpty() && !"0".equals(discountStr)) {
-                printerService.setAlignment(2, null);
-                printerService.printTextWithFont(": -$" + discountStr + "\n", null, fInfo, null);
-                printerService.setAlignment(0, null);
-            }
-            if (fTotalLine && !totalStr.isEmpty()) {
-                printerService.setAlignment(2, null);
-                printerService.printTextWithFont(": $" + totalStr + "\n", null, fTotal, null);
-                printerService.setAlignment(0, null);
-            }
-
-            // 
-            if (fFooterOn && !footer.isEmpty()) {
-                printerService.setAlignment(1, null);
-                printerService.printTextWithFont(footer + "\n", null, fFooter, null);
-                printerService.setAlignment(0, null);
+            // ===== 金額（顧客單才印）=====
+            if (!isKitchen) {
+                if (fSubtotal && !subtotalStr.isEmpty()) {
+                    printerService.setAlignment(2, null);
+                    printerService.printTextWithFont("小計 $" + subtotalStr + "\n", null, useInfoFont, null);
+                    printerService.setAlignment(0, null);
+                }
+                if (fDiscount && !discountStr.isEmpty() && !"0".equals(discountStr)) {
+                    printerService.setAlignment(2, null);
+                    printerService.printTextWithFont("折扣 -$" + discountStr + "\n", null, useInfoFont, null);
+                    printerService.setAlignment(0, null);
+                }
+                if (fTotalLine && !totalStr.isEmpty()) {
+                    printerService.setAlignment(2, null);
+                    printerService.printTextWithFont("總計 $" + totalStr + "\n", null, fTotal, null);
+                    printerService.setAlignment(0, null);
+                }
+                // ===== 頁尾 =====
+                if (fFooterOn && !footer.isEmpty()) {
+                    printerService.setAlignment(1, null);
+                    printerService.printTextWithFont(footer + "\n", null, fFooter, null);
+                    printerService.setAlignment(0, null);
+                }
             }
 
             feedAndCut();
-            if (openDrawer) openCashDrawer();
+            if (openDrawer && !isKitchen) openCashDrawer();
+            if (isKitchen) buzzer(); // 廚房單響鈴提醒
 
             settings.recordPrintResult(true, "");
-            LogManager.i(TAG, "printPosReceipt ok, orderNo=" + orderNo);
+            LogManager.i(TAG, "printPosReceipt ok, orderNo=" + orderNo + " mode=" + mode);
             return true;
         } catch (Exception e) {
             settings.recordPrintResult(false, e.getMessage());
@@ -483,7 +518,7 @@ public class SunmiPrinterManager {
     }
 
     public boolean printHtml(String title, String html) {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
@@ -506,16 +541,16 @@ public class SunmiPrinterManager {
     }
 
     public boolean printTestReceipt() {
-        if (!isConnected()) {
+        if (!ensureConnected()) {
             settings.recordPrintResult(false, "printer not connected");
             return false;
         }
         try {
             printerService.setAlignment(1, null);
-            printerService.printTextWithFont("**  **\n", null, 32, null);
+            printerService.printTextWithFont("** 測試列印 **\n", null, 32, null);
             printerService.setAlignment(0, null);
             printerService.printText("Time: " + new java.util.Date().toString() + "\n", null);
-            printerService.printText("APK : Sunmi POS Bridge\n", null);
+            printerService.printText("APK: Sunmi POS Bridge\n", null);
             printerService.printText("Status raw: " + getPrinterStatus() + "\n", null);
             feedAndCut();
             settings.recordPrintResult(true, "");
