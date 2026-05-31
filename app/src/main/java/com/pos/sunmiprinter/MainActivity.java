@@ -36,8 +36,6 @@ import android.provider.Settings;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
-    private static final String APK_VERSION = "v20260603";
-    private static final long REFRESH_INTERVAL_MS = 3000;
     private static final String APK_VERSION = "v20260525"; // ← 版號同步升至 v20260525
     private static final long REFRESH_INTERVAL_MS = 3000;
 
