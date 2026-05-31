@@ -32,6 +32,8 @@ import java.util.Locale;
 public class LogManager {
 
     private static final String TAG = "LogManager";
+    // ── v20260525 新增：客顯相關 log 統一使用此 Tag，便於 /logs 過濾 ──
+    public static final String TAG_DISPLAY = "DisplayHttpServer";
     private static final int MAX_MEMORY_LINES = 200;
     private static final int KEEP_DAYS = 7;
 
@@ -53,6 +55,7 @@ public class LogManager {
             if (!logDir.exists()) logDir.mkdirs();
             cleanupOldLogs();
             i(TAG, "LogManager initialized at " + logDir.getAbsolutePath());
+            i(TAG_DISPLAY, "DisplayHttpServer log channel ready"); // ← v20260525 新增
         } catch (Throwable t) {
             Log.e(TAG, "init failed", t);
         }
