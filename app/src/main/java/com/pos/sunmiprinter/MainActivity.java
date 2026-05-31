@@ -38,6 +38,12 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final String APK_VERSION = "v20260603";
     private static final long REFRESH_INTERVAL_MS = 3000;
+    private static final String APK_VERSION = "v20260525"; // ← 版號同步升至 v20260525
+    private static final long REFRESH_INTERVAL_MS = 3000;
+
+    // ── 客顯 HTTP Server（v20260525 新增） ──
+    private DisplayHttpServer displayHttpServer;
+
 
     private static final int COLOR_TEXT    = Color.parseColor("#212121");
     private static final int COLOR_HINT    = Color.parseColor("#757575");
@@ -108,6 +114,7 @@ private Button btnBatteryWhitelist;
         buildUi();
         ensureServiceRunning();
         bindToService();
+        startDisplayServer(); // ← v20260525 新增
     }
 
     @Override
@@ -128,6 +135,17 @@ private Button btnBatteryWhitelist;
         if (serviceBound) {
             unbindService(serviceConnection);
             serviceBound = false;
+        }
+        // v20260525 新增：停止客顯 Server
+        if (displayHttpServer != null) {
+            try {
+                displayHttpServer.stop();
+                DisplayStateManager.reset();
+                LogManager.i("MainActivity", "DisplayHttpServer stopped");
+            } catch (Throwable t) {
+                LogManager.w("MainActivity", "DisplayHttpServer stop failed: " + t.getMessage());
+            }
+            displayHttpServer = null;
         }
     }
 
@@ -271,6 +289,23 @@ private Button btnBatteryWhitelist;
 
         scroll.addView(root);
         setContentView(scroll);
+    }
+    // ==================== 客顯 Server（v20260525 新增） ====================
+
+    private void startDisplayServer() {
+        try {
+            if (displayHttpServer != null && displayHttpServer.isAlive()) {
+                LogManager.i("MainActivity", "DisplayHttpServer already running");
+                return;
+            }
+            displayHttpServer = new DisplayHttpServer(DisplayHttpServer.DEFAULT_PORT);
+            displayHttpServer.start(5000, false); // 非 daemon，逾時 5 秒
+            DisplayStateManager.reset();
+            LogManager.i("MainActivity", "DisplayHttpServer started on port "
+                    + DisplayHttpServer.DEFAULT_PORT);
+        } catch (Throwable t) {
+            LogManager.e("MainActivity", "DisplayHttpServer start failed", t);
+        }
     }
 
     // ==================== 服務操作 ====================
