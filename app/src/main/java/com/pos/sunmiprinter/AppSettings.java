@@ -10,7 +10,8 @@ import java.util.UUID;
 /**
  * 應用程式設定（SharedPreferences）
  * v20260603 新增: apiToken / lastPrint*
- * v20260608 新增: 6 組字體大小（14~30 夾值）
+ * v20260608 新增: 6 組字體大小（14~60 夾值）
+ * v20260531 新增: 廚房單獨立字級 fontKitchenItem / fontKitchenInfo（廚房單品名放大、師傅遠看清楚）
  */
 public class AppSettings {
 
@@ -53,13 +54,17 @@ public class AppSettings {
     private static final String KEY_RECEIPT_FOOTER = "receipt_footer";
     private static final String KEY_PRINT_COPIES = "print_copies";
 
-    // ===== v20260608: 字體大小（6 組） =====
+    // ===== v20260608: 字體大小（6 組，顧客單/收據用） =====
     private static final String KEY_FONT_STORE    = "font_store";    // 店名
     private static final String KEY_FONT_SUBTITLE = "font_subtitle"; // 副標
     private static final String KEY_FONT_INFO     = "font_info";     // 訂單資訊（單號/時間/類型/付款/分隔線）
     private static final String KEY_FONT_ITEM     = "font_item";     // 品項+選項
     private static final String KEY_FONT_TOTAL    = "font_total";    // 總額
     private static final String KEY_FONT_FOOTER   = "font_footer";   // 頁尾
+
+    // ===== v20260531: 廚房單獨立字級（2 組） =====
+    private static final String KEY_FONT_KITCHEN_ITEM = "font_kitchen_item"; // 廚房單品名（最大、師傅遠看）
+    private static final String KEY_FONT_KITCHEN_INFO = "font_kitchen_info"; // 廚房單資訊/選項
 
     public static final int FONT_MIN = 14;
     public static final int FONT_MAX = 60;
@@ -69,6 +74,9 @@ public class AppSettings {
     public static final int DEFAULT_FONT_ITEM     = 26;
     public static final int DEFAULT_FONT_TOTAL    = 28;
     public static final int DEFAULT_FONT_FOOTER   = 22;
+    // 廚房單預設：品名 38（師傅遠看清楚）、選項/資訊 26
+    public static final int DEFAULT_FONT_KITCHEN_ITEM = 38;
+    public static final int DEFAULT_FONT_KITCHEN_INFO = 26;
 
     private final SharedPreferences sp;
 
@@ -153,7 +161,7 @@ public class AppSettings {
     public int getPrintCopies() { return sp.getInt(KEY_PRINT_COPIES, 1); }
     public void setPrintCopies(int v) { sp.edit().putInt(KEY_PRINT_COPIES, v).apply(); }
 
-    // ===== v20260608: 字體大小 =====
+    // ===== v20260608: 字體大小（顧客單/收據） =====
     private int clampFont(int v) {
         if (v < FONT_MIN) return FONT_MIN;
         if (v > FONT_MAX) return FONT_MAX;
@@ -171,6 +179,13 @@ public class AppSettings {
     public void setFontItem(int v)     { sp.edit().putInt(KEY_FONT_ITEM,     clampFont(v)).apply(); }
     public void setFontTotal(int v)    { sp.edit().putInt(KEY_FONT_TOTAL,    clampFont(v)).apply(); }
     public void setFontFooter(int v)   { sp.edit().putInt(KEY_FONT_FOOTER,   clampFont(v)).apply(); }
+
+    // ===== v20260531: 廚房單獨立字級 =====
+    public int getFontKitchenItem() { return clampFont(sp.getInt(KEY_FONT_KITCHEN_ITEM, DEFAULT_FONT_KITCHEN_ITEM)); }
+    public int getFontKitchenInfo() { return clampFont(sp.getInt(KEY_FONT_KITCHEN_INFO, DEFAULT_FONT_KITCHEN_INFO)); }
+    public void setFontKitchenItem(int v) { sp.edit().putInt(KEY_FONT_KITCHEN_ITEM, clampFont(v)).apply(); }
+    public void setFontKitchenInfo(int v) { sp.edit().putInt(KEY_FONT_KITCHEN_INFO, clampFont(v)).apply(); }
+
     public void resetFontDefaults() {
         sp.edit()
                 .putInt(KEY_FONT_STORE,    DEFAULT_FONT_STORE)
@@ -179,6 +194,8 @@ public class AppSettings {
                 .putInt(KEY_FONT_ITEM,     DEFAULT_FONT_ITEM)
                 .putInt(KEY_FONT_TOTAL,    DEFAULT_FONT_TOTAL)
                 .putInt(KEY_FONT_FOOTER,   DEFAULT_FONT_FOOTER)
+                .putInt(KEY_FONT_KITCHEN_ITEM, DEFAULT_FONT_KITCHEN_ITEM)
+                .putInt(KEY_FONT_KITCHEN_INFO, DEFAULT_FONT_KITCHEN_INFO)
                 .apply();
     }
 
@@ -219,7 +236,9 @@ public class AppSettings {
         sb.append("\"fontInfo\":").append(getFontInfo()).append(",");
         sb.append("\"fontItem\":").append(getFontItem()).append(",");
         sb.append("\"fontTotal\":").append(getFontTotal()).append(",");
-        sb.append("\"fontFooter\":").append(getFontFooter());
+        sb.append("\"fontFooter\":").append(getFontFooter()).append(",");
+        sb.append("\"fontKitchenItem\":").append(getFontKitchenItem()).append(",");
+        sb.append("\"fontKitchenInfo\":").append(getFontKitchenInfo());
         sb.append("}");
         return sb.toString();
     }
@@ -259,6 +278,8 @@ public class AppSettings {
             if (o.has("fontItem")) setFontItem(o.getInt("fontItem"));
             if (o.has("fontTotal")) setFontTotal(o.getInt("fontTotal"));
             if (o.has("fontFooter")) setFontFooter(o.getInt("fontFooter"));
+            if (o.has("fontKitchenItem")) setFontKitchenItem(o.getInt("fontKitchenItem"));
+            if (o.has("fontKitchenInfo")) setFontKitchenInfo(o.getInt("fontKitchenInfo"));
         } catch (Exception ignored) {}
     }
 
