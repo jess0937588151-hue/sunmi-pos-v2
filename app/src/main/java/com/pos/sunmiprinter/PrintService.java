@@ -32,12 +32,16 @@ import java.util.Enumeration;
  * - 開機自動啟動（由 BootReceiver 觸發）
  * - 持有 PrintHttpServer、三種 PrinterManager
  * - START_STICKY 保持常駐，被殺掉後自動重啟
+ * - v20260531: 新增 reconnectPrinters() 供設定頁儲存後重新連線藍牙/網路
  */
 public class PrintService extends Service {
 
     private static final String TAG = "PrintService";
     private static final String CHANNEL_ID = "print_service_channel";
     private static final int NOTIFICATION_ID = 1001;
+
+    // v20260531: 設定頁儲存藍牙/網路設定後，送這個 action 通知 Service 重連
+    public static final String ACTION_RECONNECT_PRINTERS = "RECONNECT_PRINTERS";
 
     // ── Binder（給 MainActivity 綁定查詢狀態用）──
     public class LocalBinder extends Binder {
@@ -107,11 +111,14 @@ public class PrintService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "onStartCommand flags=" + flags);
 
-        // 處理來自通知的指令
+        // 處理來自通知 / 設定頁的指令
         if (intent != null) {
             String action = intent.getAction();
             if ("RESTART_SERVER".equals(action)) {
                 restartHttpServer();
+            } else if (ACTION_RECONNECT_PRINTERS.equals(action)) {
+                // v20260531: 設定頁儲存後通知重連藍牙/網路
+                reconnectPrinters();
             }
         }
 
@@ -201,6 +208,7 @@ public class PrintService extends Service {
                 new Thread(() -> {
                     boolean ok = btPrinter.connect(addr);
                     Log.d(TAG, "BT auto-connect " + addr + ": " + (ok ? "OK" : "FAIL"));
+                    LogManager.i(TAG, "BT auto-connect " + addr + ": " + (ok ? "OK" : "FAIL"));
                 }).start();
             }
         }
@@ -213,8 +221,67 @@ public class PrintService extends Service {
                 new Thread(() -> {
                     boolean ok = netPrinter.connect(ip, port);
                     Log.d(TAG, "NET auto-connect " + ip + ":" + port + ": " + (ok ? "OK" : "FAIL"));
+                    LogManager.i(TAG, "NET auto-connect " + ip + ":" + port + ": " + (ok ? "OK" : "FAIL"));
                 }).start();
             }
+        }
+    }
+
+    /**
+     * v20260531: 設定頁儲存藍牙/網路設定後呼叫。
+     * 問題背景：原本藍牙只在 onCreate 自動連一次；設定頁的「測試列印」用的是
+     * 設定頁自己 new 出來的 BluetoothPrinterManager，與 Service 持有的 btPrinter 不是同一個。
+     * 所以保存後回主畫面，Service 的 btPrinter 仍未連線，/ping 回報 bluetoothConnected=false。
+     * 這裡讓 Service 依最新設定，把自己持有的 btPrinter / netPrinter 重新連上。
+     */
+    public void reconnectPrinters() {
+        LogManager.i(TAG, "reconnectPrinters: 依最新設定重新連線藍牙/網路");
+
+        // 藍牙：若啟用且有位址，先斷再依新位址重連
+        if (settings.isBtEnabled()) {
+            final String addr = settings.getBtAddress();
+            if (addr != null && !addr.isEmpty()) {
+                new Thread(() -> {
+                    try {
+                        btPrinter.disconnect();
+                        boolean ok = btPrinter.connect(addr);
+                        LogManager.i(TAG, "reconnectPrinters BT " + addr + ": " + (ok ? "OK" : "FAIL"));
+                    } catch (Throwable t) {
+                        LogManager.w(TAG, "reconnectPrinters BT error: " + t.getMessage());
+                    }
+                    handler.post(this::updateNotification);
+                }).start();
+            } else {
+                LogManager.w(TAG, "reconnectPrinters: 藍牙已啟用但未設定位址");
+            }
+        } else {
+            // 未啟用藍牙則斷線，避免殘留舊連線
+            try { btPrinter.disconnect(); } catch (Throwable ignored) {}
+        }
+
+        // 網路：若啟用且有 IP，重連
+        if (settings.isNetEnabled()) {
+            final String ip = settings.getNetIp();
+            final int port = settings.getNetPort();
+            if (ip != null && !ip.isEmpty()) {
+                new Thread(() -> {
+                    try {
+                        netPrinter.disconnect();
+                        boolean ok = netPrinter.connect(ip, port);
+                        LogManager.i(TAG, "reconnectPrinters NET " + ip + ":" + port + ": " + (ok ? "OK" : "FAIL"));
+                    } catch (Throwable t) {
+                        LogManager.w(TAG, "reconnectPrinters NET error: " + t.getMessage());
+                    }
+                    handler.post(this::updateNotification);
+                }).start();
+            }
+        } else {
+            try { netPrinter.disconnect(); } catch (Throwable ignored) {}
+        }
+
+        // Sunmi 內建：確保仍綁定（被回收時重新 bind）
+        if (sunmiPrinter != null && !sunmiPrinter.isConnected()) {
+            sunmiPrinter.bind();
         }
     }
 
