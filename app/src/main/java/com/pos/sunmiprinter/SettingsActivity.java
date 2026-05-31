@@ -43,6 +43,8 @@ import java.util.Set;
  *  - 移除「POS 網址」欄位（已不需要 WebView）
  *  - 新增「HTTP Server 埠號」欄位（預設 8080）
  *  - 儲存後通知 PrintService 重啟 HTTP Server
+ *  - v20260531: 藍牙/網路的「連線/斷線/測試」改用 Service 持有的 manager，
+ *    儲存後呼叫 printService.reconnectPrinters()，修「保存後主頁顯示無連線」。
  */
 public class SettingsActivity extends AppCompatActivity {
 
@@ -54,8 +56,6 @@ public class SettingsActivity extends AppCompatActivity {
 
     private AppSettings settings;
     private SunmiPrinterManager sunmiPrinter;
-    private BluetoothPrinterManager btPrinter;
-    private NetworkPrinterManager netPrinter;
     private Handler handler;
 
     private boolean btChanged  = false;
@@ -83,7 +83,7 @@ public class SettingsActivity extends AppCompatActivity {
     // ── 收據 ──
     private EditText edtStoreName, edtStorePhone, edtStoreAddress, edtReceiptFooter, edtPrintCopies;
 
-    // ── PrintService 綁定（儲存後通知重啟）──
+    // ── PrintService 綁定（儲存後通知重啟 / 重連，且操作 Service 持有的 manager）──
     private PrintService printService;
     private boolean serviceBound = false;
     private final ServiceConnection serviceConnection = new ServiceConnection() {
@@ -97,6 +97,14 @@ public class SettingsActivity extends AppCompatActivity {
         }
     };
 
+    // v20260531: 取得 Service 持有的 manager；Service 未綁定時回傳 null
+    private BluetoothPrinterManager bt() {
+        return (serviceBound && printService != null) ? printService.getBtPrinter() : null;
+    }
+    private NetworkPrinterManager net() {
+        return (serviceBound && printService != null) ? printService.getNetPrinter() : null;
+    }
+
     // ==================== 生命週期 ====================
 
     @Override
@@ -108,10 +116,8 @@ public class SettingsActivity extends AppCompatActivity {
 
         sunmiPrinter = new SunmiPrinterManager(this);
         sunmiPrinter.bind();
-        btPrinter  = new BluetoothPrinterManager();
-        netPrinter = new NetworkPrinterManager();
 
-        // 綁定 PrintService（不強制建立）
+        // 綁定 PrintService（不強制建立）。藍牙/網路操作一律透過 Service 的 manager。
         bindService(new Intent(this, PrintService.class),
                 serviceConnection, Context.BIND_AUTO_CREATE);
 
@@ -298,6 +304,13 @@ public class SettingsActivity extends AppCompatActivity {
         loadBtDevices();
         root.addView(spnBtDevice);
 
+        TextView tvBtNote = new TextView(this);
+        tvBtNote.setText("提示：連線成功後請按下方「儲存設定」，系統會把此連線交給背景服務維持，重開機也會自動連回。");
+        tvBtNote.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tvBtNote.setTextColor(COLOR_HINT);
+        tvBtNote.setPadding(0, dp(4), 0, dp(4));
+        root.addView(tvBtNote);
+
         LinearLayout btBtnRow = horizontal();
         Button btnBtRefresh = button("刷新裝置");
         btnBtRefresh.setOnClickListener(v -> { loadBtDevices(); toast("共 " + btDeviceAddresses.size() + " 個裝置"); });
@@ -309,16 +322,21 @@ public class SettingsActivity extends AppCompatActivity {
             if (pos < 0 || pos >= btDeviceAddresses.size() || btDeviceAddresses.get(pos).isEmpty()) {
                 toast("請先選擇裝置"); return;
             }
-            String addr = btDeviceAddresses.get(pos);
+            final BluetoothPrinterManager m = bt();
+            if (m == null) { toast("背景服務尚未就緒，請稍候再試"); return; }
+            final String addr = btDeviceAddresses.get(pos);
+            final String name = (String) spnBtDevice.getSelectedItem();
             toast("藍牙連線中...");
             new Thread(() -> {
-                boolean ok = btPrinter.connect(addr);
+                boolean ok = m.connect(addr);
                 runOnUiThread(() -> {
                     if (ok) {
                         btChanged = true;
                         settings.setBtAddress(addr);
-                        settings.setBtName((String) spnBtDevice.getSelectedItem());
-                        toast("已連線：" + addr);
+                        settings.setBtName(name);
+                        settings.setBtEnabled(true);
+                        if (chkBtEnabled != null) chkBtEnabled.setChecked(true);
+                        toast("已連線：" + addr + "（記得按儲存設定）");
                     } else { toast("連線失敗"); }
                 });
             }).start();
@@ -326,14 +344,20 @@ public class SettingsActivity extends AppCompatActivity {
         btBtnRow.addView(btnBtConnect);
 
         Button btnBtDisconnect = dangerButton("斷線");
-        btnBtDisconnect.setOnClickListener(v -> { btPrinter.disconnect(); btChanged = true; toast("藍牙已斷線"); });
+        btnBtDisconnect.setOnClickListener(v -> {
+            BluetoothPrinterManager m = bt();
+            if (m != null) m.disconnect();
+            btChanged = true;
+            toast("藍牙已斷線");
+        });
         btBtnRow.addView(btnBtDisconnect);
 
         Button btnBtTest = button("測試列印");
         btnBtTest.setOnClickListener(v -> {
-            if (!btPrinter.isConnected()) { toast("未連線"); return; }
+            final BluetoothPrinterManager m = bt();
+            if (m == null || !m.isConnected()) { toast("未連線"); return; }
             new Thread(() -> {
-                boolean ok = btPrinter.printText("藍牙測試列印\n" +
+                boolean ok = m.printText("藍牙測試列印\n" +
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()) + "\n\n\n");
                 runOnUiThread(() -> toast(ok ? "已送出" : "失敗"));
             }).start();
@@ -367,20 +391,25 @@ public class SettingsActivity extends AppCompatActivity {
         LinearLayout netBtnRow = horizontal();
         Button btnNetConnect = button("連線");
         btnNetConnect.setOnClickListener(v -> {
+            final NetworkPrinterManager m = net();
+            if (m == null) { toast("背景服務尚未就緒，請稍候再試"); return; }
             String ip = edtNetIp.getText().toString().trim();
             int port;
             try { port = Integer.parseInt(edtNetPort.getText().toString().trim()); }
             catch (Exception e) { port = 9100; }
             if (ip.isEmpty()) { toast("請輸入 IP"); return; }
             final int fp = port;
+            final String fip = ip;
             toast("連線中...");
             new Thread(() -> {
-                boolean ok = netPrinter.connect(ip, fp);
+                boolean ok = m.connect(fip, fp);
                 runOnUiThread(() -> {
                     if (ok) {
                         netChanged = true;
-                        settings.setNetIp(ip); settings.setNetPort(fp);
-                        toast("已連線：" + ip + ":" + fp);
+                        settings.setNetIp(fip); settings.setNetPort(fp);
+                        settings.setNetEnabled(true);
+                        if (chkNetEnabled != null) chkNetEnabled.setChecked(true);
+                        toast("已連線：" + fip + ":" + fp + "（記得按儲存設定）");
                     } else { toast("連線失敗"); }
                 });
             }).start();
@@ -388,14 +417,20 @@ public class SettingsActivity extends AppCompatActivity {
         netBtnRow.addView(btnNetConnect);
 
         Button btnNetDisconnect = dangerButton("斷線");
-        btnNetDisconnect.setOnClickListener(v -> { netPrinter.disconnect(); netChanged = true; toast("網路已斷線"); });
+        btnNetDisconnect.setOnClickListener(v -> {
+            NetworkPrinterManager m = net();
+            if (m != null) m.disconnect();
+            netChanged = true;
+            toast("網路已斷線");
+        });
         netBtnRow.addView(btnNetDisconnect);
 
         Button btnNetTest = button("測試列印");
         btnNetTest.setOnClickListener(v -> {
-            if (!netPrinter.isConnected()) { toast("未連線"); return; }
+            final NetworkPrinterManager m = net();
+            if (m == null || !m.isConnected()) { toast("未連線"); return; }
             new Thread(() -> {
-                boolean ok = netPrinter.printText("網路測試列印\n" +
+                boolean ok = m.printText("網路測試列印\n" +
                         new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date()) + "\n\n\n");
                 runOnUiThread(() -> toast(ok ? "已送出" : "失敗"));
             }).start();
@@ -503,6 +538,17 @@ public class SettingsActivity extends AppCompatActivity {
         // 埠號改了 → 通知 Service 重啟 HTTP Server
         if (portChanged && serviceBound && printService != null) {
             printService.restartHttpServer();
+        }
+
+        // v20260531: 依最新藍牙/網路設定，讓 Service 重新連線。
+        // 這是修「保存後主頁顯示無連線」的關鍵：確保 Service 持有的 manager 連上線。
+        if (serviceBound && printService != null) {
+            printService.reconnectPrinters();
+        } else {
+            // Service 未綁定時，改用 startService 帶 action 觸發
+            Intent reconnect = new Intent(this, PrintService.class);
+            reconnect.setAction(PrintService.ACTION_RECONNECT_PRINTERS);
+            try { startService(reconnect); } catch (Throwable ignored) {}
         }
 
         Intent data = new Intent();
