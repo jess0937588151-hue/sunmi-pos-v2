@@ -1,11 +1,11 @@
 package com.pos.sunmiprinter;
 
+import android.app.Activity;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.InputType;
-import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.ViewGroup;
+import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -13,184 +13,268 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * 字體大小設定頁（v20260608）
- * 6 組欄位，範圍 14~30，存進 AppSettings，下次列印立即套用。
+ * 收據字級設定頁
+ * - 修正：輸入框文字色與背景色明確設定，避免「數字與背景同色看不見」
+ * - 新增：廚房單品名(fontKitchenItem)、廚房資訊(fontKitchenInfo) 可獨立調整
+ * - 字級範圍：AppSettings.FONT_MIN ~ AppSettings.FONT_MAX
  */
-public class FontSizeActivity extends AppCompatActivity {
+public class FontSizeActivity extends Activity {
 
-    private static final String TAG = "FontSizeActivity";
+    private static final int COLOR_BG       = 0xFFF5F5F5; // 整頁背景
+    private static final int COLOR_FIELD_BG = 0xFFFFFFFF; // 輸入框白底
+    private static final int COLOR_TEXT     = 0xFF212121; // 深灰字（清楚可見）
+    private static final int COLOR_HINT     = 0xFF9E9E9E; // 提示字
+    private static final int COLOR_LABEL    = 0xFF212121; // 標籤字
+    private static final int COLOR_DESC     = 0xFF616161; // 說明字
 
     private AppSettings settings;
 
-    private EditText etStore;
-    private EditText etSubtitle;
-    private EditText etInfo;
-    private EditText etItem;
-    private EditText etTotal;
-    private EditText etFooter;
+    // 欄位 key 與對應輸入框
+    private static class Field {
+        String key;
+        String label;
+        String desc;
+        EditText input;
+        int defVal;
+        Field(String key, String label, String desc, int defVal) {
+            this.key = key; this.label = label; this.desc = desc; this.defVal = defVal;
+        }
+    }
+
+    private final List<Field> fields = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        settings = new AppSettings(getApplicationContext());
-        setContentView(buildUi());
-        loadValues();
-    }
+        settings = LogManager.getAppSettings();
+        if (settings == null) {
+            settings = new AppSettings(this);
+        }
 
-    private ScrollView buildUi() {
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.WHITE);
-        scroll.setPadding(dp(16), dp(20), dp(16), dp(20));
+        scroll.setBackgroundColor(COLOR_BG);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(20), dp(20), dp(20));
+        root.setBackgroundColor(COLOR_BG);
+        scroll.addView(root);
 
+        // 標題
         TextView title = new TextView(this);
-        title.setText("收據字體大小設定");
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        title.setTextColor(Color.parseColor("#1976D2"));
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
+        title.setText("收據字級設定");
+        title.setTextColor(COLOR_TEXT);
+        title.setTextSize(22);
         title.setPadding(0, 0, 0, dp(8));
         root.addView(title);
 
-        TextView hint = new TextView(this);
-        hint.setText("範圍 " + AppSettings.FONT_MIN + "～" + AppSettings.FONT_MAX
-                + " 像素，超出範圍會自動夾回。修改後按「儲存」立即套用，下次列印生效。");
-        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        hint.setTextColor(Color.parseColor("#757575"));
-        hint.setPadding(dp(4), 0, dp(4), dp(12));
-        root.addView(hint);
+        TextView tip = new TextView(this);
+        tip.setText("數值範圍 " + AppSettings.FONT_MIN + " ~ " + AppSettings.FONT_MAX
+                + "。廚房單品名建議 36~42 以利出單清晰辨識。");
+        tip.setTextColor(COLOR_DESC);
+        tip.setTextSize(14);
+        tip.setPadding(0, 0, 0, dp(16));
+        root.addView(tip);
 
-        etStore    = addRow(root, "店名（標題）", AppSettings.DEFAULT_FONT_STORE);
-        etSubtitle = addRow(root, "副標", AppSettings.DEFAULT_FONT_SUBTITLE);
-        etInfo     = addRow(root, "訂單資訊（單號 / 時間 / 類型 / 付款）", AppSettings.DEFAULT_FONT_INFO);
-        etItem     = addRow(root, "品項 + 選項（最重要）", AppSettings.DEFAULT_FONT_ITEM);
-        etTotal    = addRow(root, "總額", AppSettings.DEFAULT_FONT_TOTAL);
-        etFooter   = addRow(root, "頁尾（謝謝光臨等）", AppSettings.DEFAULT_FONT_FOOTER);
+        // ===== 收據（顧客單）字級 =====
+        addSectionTitle(root, "顧客收據");
+        addRow(root, "store",    "店名",   "最上方店名字級",        settings.getFontStore());
+        addRow(root, "subtitle", "副標",   "電話/地址等副標題",      settings.getFontSubtitle());
+        addRow(root, "info",     "訂單資訊", "單號/時間/桌號",        settings.getFontInfo());
+        addRow(root, "item",     "品項",   "品名與金額",            settings.getFontItem());
+        addRow(root, "total",    "合計",   "總金額字級",            settings.getFontTotal());
+        addRow(root, "footer",   "結尾",   "謝謝光臨等",            settings.getFontFooter());
 
-        // 按鈕
+        // ===== 廚房單字級（可獨立調整）=====
+        addSectionTitle(root, "廚房單（出單機）");
+        addRow(root, "kitchenItem", "廚房單品名", "出單機的品名字級，數字越大越清楚",
+                settings.getFontKitchenItem());
+        addRow(root, "kitchenInfo", "廚房資訊",   "桌號/單號/備註等",
+                settings.getFontKitchenInfo());
+
+        // ===== 按鈕區 =====
         LinearLayout btnRow = new LinearLayout(this);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setPadding(0, dp(20), 0, 0);
-
-        Button btnSave = new Button(this);
-        btnSave.setText("儲存");
-        btnSave.setAllCaps(false);
-        btnSave.setTextColor(Color.WHITE);
-        btnSave.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        btnSave.setBackgroundColor(Color.parseColor("#4CAF50"));
-        LinearLayout.LayoutParams lpSave = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f);
-        lpSave.setMargins(dp(4), 0, dp(4), 0);
-        btnSave.setLayoutParams(lpSave);
-        btnSave.setPadding(dp(8), dp(14), dp(8), dp(14));
-        btnSave.setOnClickListener(v -> saveValues());
-        btnRow.addView(btnSave);
-
-        Button btnReset = new Button(this);
-        btnReset.setText("還原預設");
-        btnReset.setAllCaps(false);
-        btnReset.setTextColor(Color.WHITE);
-        btnReset.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        btnReset.setBackgroundColor(Color.parseColor("#FF9800"));
-        LinearLayout.LayoutParams lpReset = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpReset.setMargins(dp(4), 0, dp(4), 0);
-        btnReset.setLayoutParams(lpReset);
-        btnReset.setPadding(dp(8), dp(14), dp(8), dp(14));
-        btnReset.setOnClickListener(v -> resetDefaults());
-        btnRow.addView(btnReset);
-
-        Button btnClose = new Button(this);
-        btnClose.setText("關閉");
-        btnClose.setAllCaps(false);
-        btnClose.setTextColor(Color.WHITE);
-        btnClose.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        btnClose.setBackgroundColor(Color.parseColor("#757575"));
-        LinearLayout.LayoutParams lpClose = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        lpClose.setMargins(dp(4), 0, dp(4), 0);
-        btnClose.setLayoutParams(lpClose);
-        btnClose.setPadding(dp(8), dp(14), dp(8), dp(14));
-        btnClose.setOnClickListener(v -> finish());
-        btnRow.addView(btnClose);
-
+        btnRow.setPadding(0, dp(24), 0, 0);
         root.addView(btnRow);
 
-        scroll.addView(root);
-        return scroll;
+        Button saveBtn = makeButton("儲存", 0xFF1976D2);
+        saveBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { save(); }
+        });
+        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        lp1.setMargins(0, 0, dp(8), 0);
+        btnRow.addView(saveBtn, lp1);
+
+        Button resetBtn = makeButton("回預設", 0xFF757575);
+        resetBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { resetDefaults(); }
+        });
+        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        lp2.setMargins(dp(8), 0, dp(8), 0);
+        btnRow.addView(resetBtn, lp2);
+
+        Button closeBtn = makeButton("關閉", 0xFFB71C1C);
+        closeBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { finish(); }
+        });
+        LinearLayout.LayoutParams lp3 = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        lp3.setMargins(dp(8), 0, 0, 0);
+        btnRow.addView(closeBtn, lp3);
+
+        setContentView(scroll);
     }
 
-    private EditText addRow(LinearLayout parent, String label, int defVal) {
-        TextView tv = new TextView(this);
-        tv.setText(label + "（預設 " + defVal + "）");
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        tv.setTextColor(Color.parseColor("#212121"));
-        tv.setPadding(dp(4), dp(8), dp(4), dp(2));
-        parent.addView(tv);
+    private void addSectionTitle(LinearLayout parent, String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(COLOR_TEXT);
+        t.setTextSize(17);
+        t.setPadding(0, dp(16), 0, dp(8));
+        parent.addView(t);
 
-        EditText et = new EditText(this);
-        et.setInputType(InputType.TYPE_CLASS_NUMBER);
-        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        et.setPadding(dp(10), dp(8), dp(10), dp(8));
+        View line = new View(this);
+        line.setBackgroundColor(0xFFE0E0E0);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(dp(2), 0, dp(2), dp(4));
-        et.setLayoutParams(lp);
-        parent.addView(et);
-        return et;
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+        lp.setMargins(0, 0, 0, dp(8));
+        parent.addView(line, lp);
     }
 
-    private void loadValues() {
-        etStore.setText(String.valueOf(settings.getFontStore()));
-        etSubtitle.setText(String.valueOf(settings.getFontSubtitle()));
-        etInfo.setText(String.valueOf(settings.getFontInfo()));
-        etItem.setText(String.valueOf(settings.getFontItem()));
-        etTotal.setText(String.valueOf(settings.getFontTotal()));
-        etFooter.setText(String.valueOf(settings.getFontFooter()));
+    private void addRow(LinearLayout parent, String key, String label, String desc, int value) {
+        Field f = new Field(key, label, desc, value);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, dp(6));
+
+        // 左側標籤＋說明
+        LinearLayout textBox = new LinearLayout(this);
+        textBox.setOrientation(LinearLayout.VERTICAL);
+
+        TextView lab = new TextView(this);
+        lab.setText(label);
+        lab.setTextColor(COLOR_LABEL);
+        lab.setTextSize(16);
+        textBox.addView(lab);
+
+        TextView d = new TextView(this);
+        d.setText(desc);
+        d.setTextColor(COLOR_DESC);
+        d.setTextSize(12);
+        textBox.addView(d);
+
+        LinearLayout.LayoutParams labLp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        row.addView(textBox, labLp);
+
+        // 右側輸入框（重點：明確設定文字色與背景色）
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(value));
+        input.setTextColor(COLOR_TEXT);            // 深灰字，避免看不見
+        input.setBackgroundColor(COLOR_FIELD_BG);  // 白底
+        input.setHintTextColor(COLOR_HINT);
+        input.setTextSize(18);
+        input.setGravity(Gravity.CENTER);
+        input.setPadding(dp(12), dp(10), dp(12), dp(10));
+        input.setSingleLine(true);
+
+        LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(dp(90),
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        row.addView(input, inLp);
+
+        f.input = input;
+        fields.add(f);
+
+        parent.addView(row);
     }
 
-    private int parseSafe(EditText et, int def) {
+    private Button makeButton(String text, int color) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextColor(Color.WHITE);
+        b.setBackgroundColor(color);
+        b.setAllCaps(false);
+        b.setTextSize(16);
+        return b;
+    }
+
+    private int clamp(int v) {
+        if (v < AppSettings.FONT_MIN) return AppSettings.FONT_MIN;
+        if (v > AppSettings.FONT_MAX) return AppSettings.FONT_MAX;
+        return v;
+    }
+
+    private int parseField(Field f) {
         try {
-            String s = et.getText().toString().trim();
-            if (s.isEmpty()) return def;
-            return Integer.parseInt(s);
+            int v = Integer.parseInt(f.input.getText().toString().trim());
+            return clamp(v);
         } catch (Exception e) {
-            return def;
+            return clamp(f.defVal);
         }
     }
 
-    private void saveValues() {
+    private void save() {
         try {
-            settings.setFontStore(parseSafe(etStore,       AppSettings.DEFAULT_FONT_STORE));
-            settings.setFontSubtitle(parseSafe(etSubtitle, AppSettings.DEFAULT_FONT_SUBTITLE));
-            settings.setFontInfo(parseSafe(etInfo,         AppSettings.DEFAULT_FONT_INFO));
-            settings.setFontItem(parseSafe(etItem,         AppSettings.DEFAULT_FONT_ITEM));
-            settings.setFontTotal(parseSafe(etTotal,       AppSettings.DEFAULT_FONT_TOTAL));
-            settings.setFontFooter(parseSafe(etFooter,     AppSettings.DEFAULT_FONT_FOOTER));
-            loadValues(); // 重新顯示夾值後的結果
-            Toast.makeText(this, "已儲存（超出 14~30 已自動夾回）", Toast.LENGTH_SHORT).show();
-            LogManager.i(TAG, "font sizes saved: store=" + settings.getFontStore()
-                    + " subtitle=" + settings.getFontSubtitle()
-                    + " info=" + settings.getFontInfo()
-                    + " item=" + settings.getFontItem()
-                    + " total=" + settings.getFontTotal()
-                    + " footer=" + settings.getFontFooter());
-        } catch (Throwable t) {
-            LogManager.e(TAG, "saveValues failed", t);
-            Toast.makeText(this, "儲存失敗：" + t.getMessage(), Toast.LENGTH_LONG).show();
+            for (Field f : fields) {
+                int v = parseField(f);
+                switch (f.key) {
+                    case "store":       settings.setFontStore(v);       break;
+                    case "subtitle":    settings.setFontSubtitle(v);    break;
+                    case "info":        settings.setFontInfo(v);        break;
+                    case "item":        settings.setFontItem(v);        break;
+                    case "total":       settings.setFontTotal(v);       break;
+                    case "footer":      settings.setFontFooter(v);      break;
+                    case "kitchenItem": settings.setFontKitchenItem(v); break;
+                    case "kitchenInfo": settings.setFontKitchenInfo(v); break;
+                }
+                // 同步回填顯示（夾值後的實際值）
+                f.input.setText(String.valueOf(v));
+            }
+            LogManager.i("FontSize", "字級已儲存");
+            Toast.makeText(this, "字級已儲存", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            LogManager.e("FontSize", "儲存失敗: " + e.getMessage());
+            Toast.makeText(this, "儲存失敗：" + e.getMessage(), Toast.LENGTH_LONG).show();
         }
     }
 
     private void resetDefaults() {
-        settings.resetFontDefaults();
-        loadValues();
-        Toast.makeText(this, "已還原預設值", Toast.LENGTH_SHORT).show();
+        try {
+            settings.resetFontDefaults();
+            // 重新讀取並填回各欄位
+            for (Field f : fields) {
+                int v;
+                switch (f.key) {
+                    case "store":       v = settings.getFontStore();       break;
+                    case "subtitle":    v = settings.getFontSubtitle();    break;
+                    case "info":        v = settings.getFontInfo();        break;
+                    case "item":        v = settings.getFontItem();        break;
+                    case "total":       v = settings.getFontTotal();       break;
+                    case "footer":      v = settings.getFontFooter();      break;
+                    case "kitchenItem": v = settings.getFontKitchenItem(); break;
+                    case "kitchenInfo": v = settings.getFontKitchenInfo(); break;
+                    default:            v = f.defVal;                      break;
+                }
+                f.input.setText(String.valueOf(v));
+            }
+            Toast.makeText(this, "已回復預設字級", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "回復失敗：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private int dp(int v) {
-        return (int) TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
+        float d = getResources().getDisplayMetrics().density;
+        return Math.round(v * d);
     }
 }
