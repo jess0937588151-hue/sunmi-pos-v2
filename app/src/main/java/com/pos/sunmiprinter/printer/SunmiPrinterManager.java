@@ -429,18 +429,16 @@ public class SunmiPrinterManager {
                     // 主行：數量在前。用 printColumnsString 對齊：
                     //   廚房單 = [數量][品名]（不印價格）
                     //   顧客單 = [數量][品名][價格]
-                    String qtyCol = fItemQty ? ("x" + qty) : "";
+                                       String qtyCol = fItemQty ? ("x" + qty) : "";
                     if (isKitchen) {
-                        // 兩欄：數量 4、品名其餘（28 字總寬，數量靠左、品名靠左、品名欄會自動折行）
-                        String[] cols = { qtyCol, name };
-                        int[] widths  = { 4, 24 };
-                        int[] aligns  = { 0, 0 }; // 0=左 1=中 2=右
+                        // v20260620 修正廚房單品名無法放大：原本用 printColumnsString 印品名，
+                        // 但該方法不吃字級（setFontSize 對欄位列印在 T2 無效），導致 30/50 印出來一樣大。
+                        // 改用 printTextWithFont 印「數量 + 品名」整行，字級才會真正生效。
                         printerService.setAlignment(0, null);
-                        // 廚房單品名要大字：printColumnsString 不吃字級，改用 setFontSize（部分機型支援）+ fallback
-                        try { printerService.setFontSize(useItemFont, null); } catch (Throwable ignore) {}
-                        printerService.printColumnsString(cols, widths, aligns, null);
-                        try { printerService.setFontSize(useInfoFont, null); } catch (Throwable ignore) {}
+                        String kitchenItemLine = (qtyCol.isEmpty() ? "" : (qtyCol + " ")) + name + "\n";
+                        printerService.printTextWithFont(kitchenItemLine, null, useItemFont, null);
                     } else {
+
                         // 顧客單三欄：數量 4、品名 18、價格 10（靠右）
                         String priceCol = fItemPrice ? ("$" + String.format("%.0f", price)) : "";
                         String[] cols = { qtyCol, name, priceCol };
