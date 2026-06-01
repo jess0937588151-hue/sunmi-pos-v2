@@ -69,7 +69,7 @@ public class AppSettings {
     private static final String KEY_FONT_KITCHEN_OPTION = "font_kitchen_option"; // v20260620 廚房單子選項（灑粉/加料等）
 
     public static final int FONT_MIN = 14;
-    public static final int FONT_MAX = 60;
+    public static final int FONT_MAX = 120;
     public static final int DEFAULT_FONT_STORE    = 30;
     public static final int DEFAULT_FONT_SUBTITLE = 24;
     public static final int DEFAULT_FONT_INFO     = 22;
