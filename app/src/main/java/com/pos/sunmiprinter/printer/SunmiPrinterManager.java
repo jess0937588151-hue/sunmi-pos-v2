@@ -311,9 +311,12 @@ public class SunmiPrinterManager {
             // 廚房單字級（可在設定頁調整）
             float fKItem = settings.getFontKitchenItem();
             float fKInfo = settings.getFontKitchenInfo();
-            // 本次實際採用：廚房單品名用 fKItem、資訊/選項用 fKInfo
+                        // 廚房單子選項字級（v20260620 可在設定頁獨立調整）
+            float fKOption = settings.getFontKitchenOption();
+            // 本次實際採用：廚房單品名用 fKItem、資訊用 fKInfo、子選項用 fKOption
             float useItemFont = isKitchen ? fKItem : fItem;
             float useInfoFont = isKitchen ? fKInfo : fInfo;
+            float useOptionFont = isKitchen ? fKOption : fItem;
             LogManager.i(TAG, "printPosReceipt mode=" + mode + " isKitchen=" + isKitchen
                     + " useItemFont=" + useItemFont + " useInfoFont=" + useInfoFont);
 
