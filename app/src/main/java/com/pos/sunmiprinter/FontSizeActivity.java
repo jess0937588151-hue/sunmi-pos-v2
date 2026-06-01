@@ -20,6 +20,7 @@ import java.util.List;
  * 收據字級設定頁
  * - 修正：輸入框文字色與背景色明確設定，避免「數字與背景同色看不見」
  * - 新增：廚房單品名(fontKitchenItem)、廚房資訊(fontKitchenInfo) 可獨立調整
+ * - v20260620 新增：廚房單子選項(fontKitchenOption) 可獨立調整（品名與子選項分開設定）
  * - 字級範圍：AppSettings.FONT_MIN ~ AppSettings.FONT_MAX
  */
 public class FontSizeActivity extends Activity {
@@ -93,6 +94,8 @@ public class FontSizeActivity extends Activity {
         addSectionTitle(root, "廚房單（出單機）");
         addRow(root, "kitchenItem", "廚房單品名", "出單機的品名字級，數字越大越清楚",
                 settings.getFontKitchenItem());
+        addRow(root, "kitchenOption", "廚房單子選項", "灑粉/加料等子選項字級（可與品名分開設定）",
+                settings.getFontKitchenOption());
         addRow(root, "kitchenInfo", "廚房資訊",   "桌號/單號/備註等",
                 settings.getFontKitchenInfo());
 
@@ -228,14 +231,15 @@ public class FontSizeActivity extends Activity {
             for (Field f : fields) {
                 int v = parseField(f);
                 switch (f.key) {
-                    case "store":       settings.setFontStore(v);       break;
-                    case "subtitle":    settings.setFontSubtitle(v);    break;
-                    case "info":        settings.setFontInfo(v);        break;
-                    case "item":        settings.setFontItem(v);        break;
-                    case "total":       settings.setFontTotal(v);       break;
-                    case "footer":      settings.setFontFooter(v);      break;
-                    case "kitchenItem": settings.setFontKitchenItem(v); break;
-                    case "kitchenInfo": settings.setFontKitchenInfo(v); break;
+                    case "store":         settings.setFontStore(v);         break;
+                    case "subtitle":      settings.setFontSubtitle(v);      break;
+                    case "info":          settings.setFontInfo(v);          break;
+                    case "item":          settings.setFontItem(v);          break;
+                    case "total":         settings.setFontTotal(v);         break;
+                    case "footer":        settings.setFontFooter(v);        break;
+                    case "kitchenItem":   settings.setFontKitchenItem(v);   break;
+                    case "kitchenOption": settings.setFontKitchenOption(v); break;
+                    case "kitchenInfo":   settings.setFontKitchenInfo(v);   break;
                 }
                 // 同步回填顯示（夾值後的實際值）
                 f.input.setText(String.valueOf(v));
@@ -255,15 +259,16 @@ public class FontSizeActivity extends Activity {
             for (Field f : fields) {
                 int v;
                 switch (f.key) {
-                    case "store":       v = settings.getFontStore();       break;
-                    case "subtitle":    v = settings.getFontSubtitle();    break;
-                    case "info":        v = settings.getFontInfo();        break;
-                    case "item":        v = settings.getFontItem();        break;
-                    case "total":       v = settings.getFontTotal();       break;
-                    case "footer":      v = settings.getFontFooter();      break;
-                    case "kitchenItem": v = settings.getFontKitchenItem(); break;
-                    case "kitchenInfo": v = settings.getFontKitchenInfo(); break;
-                    default:            v = f.defVal;                      break;
+                    case "store":         v = settings.getFontStore();         break;
+                    case "subtitle":      v = settings.getFontSubtitle();      break;
+                    case "info":          v = settings.getFontInfo();          break;
+                    case "item":          v = settings.getFontItem();          break;
+                    case "total":         v = settings.getFontTotal();         break;
+                    case "footer":        v = settings.getFontFooter();        break;
+                    case "kitchenItem":   v = settings.getFontKitchenItem();   break;
+                    case "kitchenOption": v = settings.getFontKitchenOption(); break;
+                    case "kitchenInfo":   v = settings.getFontKitchenInfo();   break;
+                    default:              v = f.defVal;                        break;
                 }
                 f.input.setText(String.valueOf(v));
             }
