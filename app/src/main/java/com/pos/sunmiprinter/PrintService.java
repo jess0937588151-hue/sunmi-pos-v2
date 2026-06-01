@@ -153,30 +153,45 @@ public class PrintService extends Service {
 
 
 
-    // ==================== HTTP Server ====================
+        // ==================== HTTP Server ====================
 
         private void startHttpServer() {
-        stopHttpServer();
+        // v20260620 修正廚房單偶發跳 PDF：埠未釋放時 bind 會拋 BindException（Address already in use），
+        // 原本一失敗就放棄 → server 起不來 → POS 連不上 → fallback 成瀏覽器 PDF。
+        // 改為自動重試數次，每次先停舊 server 並等 socket 釋放，全部失敗才標記失敗。
+        final int MAX_TRY = 10;          // 最多嘗試 10 次
+        final long RETRY_WAIT_MS = 200; // 每次間隔 200ms，等舊 socket 釋放
         int port = settings.getHttpPort();
-        try {
-            httpServer = new PrintHttpServer(port, sunmiPrinter, btPrinter, netPrinter);
-            // 關鍵：第二個參數 false = 非 daemon thread，避免 Android 7.1 回收
-            httpServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
-            serverRunning = true;
-            Log.d(TAG, "HTTP Server started on 127.0.0.1:" + port);
-            LogManager.i(TAG, "HTTP Server started on 127.0.0.1:" + port);
-            updateNotification();
-        } catch (Exception e) {
-            Log.e(TAG, "HTTP Server start failed", e);
-            LogManager.e(TAG, "HTTP Server start failed on port " + port, e);
-            serverRunning = false;
-            httpServer = null;
-            updateNotification();
+
+        for (int attempt = 1; attempt <= MAX_TRY; attempt++) {
+            stopHttpServer(); // 每次都先確保舊 server 停掉、socket 釋放
+            try {
+                httpServer = new PrintHttpServer(port, sunmiPrinter, btPrinter, netPrinter);
+                // 關鍵：第二個參數 false = 非 daemon thread，避免 Android 7.1 回收
+                httpServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
+                serverRunning = true;
+                Log.d(TAG, "HTTP Server started on 127.0.0.1:" + port + " (attempt " + attempt + ")");
+                LogManager.i(TAG, "HTTP Server started on 127.0.0.1:" + port + " (attempt " + attempt + ")");
+                updateNotification();
+                return; // 成功就結束
+            } catch (Exception e) {
+                Log.e(TAG, "HTTP Server start failed (attempt " + attempt + "/" + MAX_TRY + ")", e);
+                LogManager.e(TAG, "HTTP Server start failed on port " + port
+                        + " (attempt " + attempt + "/" + MAX_TRY + ")", e);
+                serverRunning = false;
+                httpServer = null;
+                if (attempt < MAX_TRY) {
+                    try { Thread.sleep(RETRY_WAIT_MS); } catch (InterruptedException ignored) {}
+                } else {
+                    updateNotification(); // 最後一次才更新通知為失敗狀態
+                }
+            }
         }
     }
 
 
        private void stopHttpServer() {
+
         if (httpServer != null) {
             try {
                 httpServer.stop();
