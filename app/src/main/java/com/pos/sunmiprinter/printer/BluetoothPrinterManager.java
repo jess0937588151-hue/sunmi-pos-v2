@@ -99,17 +99,25 @@ public class BluetoothPrinterManager {
         });
     }
 
-    public boolean printTextWithFont(String text, int size, boolean bold) {
+        public boolean printTextWithFont(String text, int size, boolean bold) {
         return retry(() -> {
             write(ESC_INIT);
             if (bold) write(ESC_BOLD_ON);
-            if (size > 24) write(GS_DOUBLE_SIZE); else write(GS_NORMAL_SIZE);
+            write(gsSizeByPoint(size));
             write(text.getBytes(GBK));
             write(LF);
             write(ESC_BOLD_OFF);
             write(GS_NORMAL_SIZE);
         });
     }
+
+    /** 點數換算 ESC/POS 放大倍率：24-31→1x, 32-47→2x, 48以上→3x */
+    private byte[] gsSizeByPoint(int pt) {
+        if (pt >= 48) return GS_TRIPLE_SIZE;
+        if (pt >= 32) return GS_DOUBLE_SIZE;
+        return GS_NORMAL_SIZE;
+    }
+
 
     public boolean printColumns(String left, String right, int totalWidth) {
         return retry(() -> {
@@ -179,10 +187,16 @@ public class BluetoothPrinterManager {
         });
     }
 
-    public boolean printPosReceipt(String jsonStr) {
+        public boolean printPosReceipt(String jsonStr) {
         return retry(() -> {
             JSONObject data = new JSONObject(jsonStr);
+            // mode=="kitchen" 直接轉廚房格式，避免印出金額/合計/謝謝光臨
+            if ("kitchen".equals(data.optString("mode", "receipt"))) {
+                printKitchenReceipt(jsonStr);
+                return;
+            }
             write(ESC_INIT);
+
 
             // 店名
             write(ESC_CENTER);
@@ -375,13 +389,29 @@ public class BluetoothPrinterManager {
     private static final byte[] ESC_BOLD_ON = {0x1B, 0x45, 0x01};
     private static final byte[] ESC_BOLD_OFF = {0x1B, 0x45, 0x00};
     private static final byte[] GS_DOUBLE_SIZE = {0x1D, 0x21, 0x11};
+    private static final byte[] GS_TRIPLE_SIZE = {0x1D, 0x21, 0x22};
     private static final byte[] GS_NORMAL_SIZE = {0x1D, 0x21, 0x00};
     private static final byte[] CUT_PAPER = {0x1D, 0x56, 0x01};
     private static final byte[] OPEN_DRAWER = {0x10, 0x14, 0x01, 0x00, 0x05};
     private static final byte[] BUZZER = {0x1B, 0x42, 0x03, 0x03};
     private static final String SEPARATOR = "--------------------------------";
+    private static final byte[] GS_TRIPLE_SIZE = {0x1D, 0x21, 0x22}; // 寬3倍高3倍
+    private static final byte[] GS_BOLD2X      = {0x1D, 0x21, 0x01}; // 只高2倍（廚房單資訊用）
+
 
     // ==================== 内部工具 ====================
+        //** 點數(24~60)換算成 ESC/POS 放大倍率指令。24-31→1x, 32-47→2x, 48+→3x *//
+    private byte[] gsSizeByPoint(float pt) {
+        if (pt >= 48) return GS_TRIPLE_SIZE;
+        if (pt >= 32) return GS_DOUBLE_SIZE;
+        return GS_NORMAL_SIZE;
+    }
+    private byte[] gsSizeByPoint(float pt) {
+        if (pt >= 48) return GS_TRIPLE_SIZE;
+        if (pt >= 32) return GS_DOUBLE_SIZE;
+        return GS_NORMAL_SIZE;
+    }
+
 
     private void write(byte[] data) throws IOException {
         if (outputStream == null) throw new IOException("Not connected");
