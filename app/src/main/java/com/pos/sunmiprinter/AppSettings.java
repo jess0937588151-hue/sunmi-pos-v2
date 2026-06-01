@@ -12,6 +12,7 @@ import java.util.UUID;
  * v20260603 新增: apiToken / lastPrint*
  * v20260608 新增: 6 組字體大小（14~60 夾值）
  * v20260531 新增: 廚房單獨立字級 fontKitchenItem / fontKitchenInfo（廚房單品名放大、師傅遠看清楚）
+ * v20260620 新增: 廚房單子選項獨立字級 fontKitchenOption（品名與子選項可分開設定大小）
  */
 public class AppSettings {
 
@@ -62,9 +63,10 @@ public class AppSettings {
     private static final String KEY_FONT_TOTAL    = "font_total";    // 總額
     private static final String KEY_FONT_FOOTER   = "font_footer";   // 頁尾
 
-    // ===== v20260531: 廚房單獨立字級（2 組） =====
+    // ===== v20260531: 廚房單獨立字級（3 組） =====
     private static final String KEY_FONT_KITCHEN_ITEM = "font_kitchen_item"; // 廚房單品名（最大、師傅遠看）
-    private static final String KEY_FONT_KITCHEN_INFO = "font_kitchen_info"; // 廚房單資訊/選項
+    private static final String KEY_FONT_KITCHEN_INFO = "font_kitchen_info"; // 廚房單資訊（單號/時間/桌號等）
+    private static final String KEY_FONT_KITCHEN_OPTION = "font_kitchen_option"; // v20260620 廚房單子選項（灑粉/加料等）
 
     public static final int FONT_MIN = 14;
     public static final int FONT_MAX = 60;
@@ -74,9 +76,10 @@ public class AppSettings {
     public static final int DEFAULT_FONT_ITEM     = 26;
     public static final int DEFAULT_FONT_TOTAL    = 28;
     public static final int DEFAULT_FONT_FOOTER   = 22;
-    // 廚房單預設：品名 38（師傅遠看清楚）、選項/資訊 26
+    // 廚房單預設：品名 38（師傅遠看清楚）、資訊 26、子選項 30（v20260620）
     public static final int DEFAULT_FONT_KITCHEN_ITEM = 38;
     public static final int DEFAULT_FONT_KITCHEN_INFO = 26;
+    public static final int DEFAULT_FONT_KITCHEN_OPTION = 30;
 
     private final SharedPreferences sp;
 
@@ -183,8 +186,10 @@ public class AppSettings {
     // ===== v20260531: 廚房單獨立字級 =====
     public int getFontKitchenItem() { return clampFont(sp.getInt(KEY_FONT_KITCHEN_ITEM, DEFAULT_FONT_KITCHEN_ITEM)); }
     public int getFontKitchenInfo() { return clampFont(sp.getInt(KEY_FONT_KITCHEN_INFO, DEFAULT_FONT_KITCHEN_INFO)); }
+    public int getFontKitchenOption() { return clampFont(sp.getInt(KEY_FONT_KITCHEN_OPTION, DEFAULT_FONT_KITCHEN_OPTION)); } // v20260620
     public void setFontKitchenItem(int v) { sp.edit().putInt(KEY_FONT_KITCHEN_ITEM, clampFont(v)).apply(); }
     public void setFontKitchenInfo(int v) { sp.edit().putInt(KEY_FONT_KITCHEN_INFO, clampFont(v)).apply(); }
+    public void setFontKitchenOption(int v) { sp.edit().putInt(KEY_FONT_KITCHEN_OPTION, clampFont(v)).apply(); } // v20260620
 
     public void resetFontDefaults() {
         sp.edit()
@@ -196,6 +201,7 @@ public class AppSettings {
                 .putInt(KEY_FONT_FOOTER,   DEFAULT_FONT_FOOTER)
                 .putInt(KEY_FONT_KITCHEN_ITEM, DEFAULT_FONT_KITCHEN_ITEM)
                 .putInt(KEY_FONT_KITCHEN_INFO, DEFAULT_FONT_KITCHEN_INFO)
+                .putInt(KEY_FONT_KITCHEN_OPTION, DEFAULT_FONT_KITCHEN_OPTION)
                 .apply();
     }
 
@@ -238,7 +244,8 @@ public class AppSettings {
         sb.append("\"fontTotal\":").append(getFontTotal()).append(",");
         sb.append("\"fontFooter\":").append(getFontFooter()).append(",");
         sb.append("\"fontKitchenItem\":").append(getFontKitchenItem()).append(",");
-        sb.append("\"fontKitchenInfo\":").append(getFontKitchenInfo());
+        sb.append("\"fontKitchenInfo\":").append(getFontKitchenInfo()).append(",");
+        sb.append("\"fontKitchenOption\":").append(getFontKitchenOption());
         sb.append("}");
         return sb.toString();
     }
@@ -280,6 +287,7 @@ public class AppSettings {
             if (o.has("fontFooter")) setFontFooter(o.getInt("fontFooter"));
             if (o.has("fontKitchenItem")) setFontKitchenItem(o.getInt("fontKitchenItem"));
             if (o.has("fontKitchenInfo")) setFontKitchenInfo(o.getInt("fontKitchenInfo"));
+            if (o.has("fontKitchenOption")) setFontKitchenOption(o.getInt("fontKitchenOption"));
         } catch (Exception ignored) {}
     }
 
