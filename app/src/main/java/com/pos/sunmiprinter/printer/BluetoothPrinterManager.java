@@ -395,24 +395,9 @@ public class BluetoothPrinterManager {
     private static final byte[] OPEN_DRAWER = {0x10, 0x14, 0x01, 0x00, 0x05};
     private static final byte[] BUZZER = {0x1B, 0x42, 0x03, 0x03};
     private static final String SEPARATOR = "--------------------------------";
-    private static final byte[] GS_TRIPLE_SIZE = {0x1D, 0x21, 0x22}; // 寬3倍高3倍
-    private static final byte[] GS_BOLD2X      = {0x1D, 0x21, 0x01}; // 只高2倍（廚房單資訊用）
-
+   
 
     // ==================== 内部工具 ====================
-        //** 點數(24~60)換算成 ESC/POS 放大倍率指令。24-31→1x, 32-47→2x, 48+→3x *//
-    private byte[] gsSizeByPoint(float pt) {
-        if (pt >= 48) return GS_TRIPLE_SIZE;
-        if (pt >= 32) return GS_DOUBLE_SIZE;
-        return GS_NORMAL_SIZE;
-    }
-    private byte[] gsSizeByPoint(float pt) {
-        if (pt >= 48) return GS_TRIPLE_SIZE;
-        if (pt >= 32) return GS_DOUBLE_SIZE;
-        return GS_NORMAL_SIZE;
-    }
-
-
     private void write(byte[] data) throws IOException {
         if (outputStream == null) throw new IOException("Not connected");
         outputStream.write(data);
