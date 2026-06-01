@@ -453,16 +453,17 @@ public class SunmiPrinterManager {
                         try { printerService.setFontSize(useInfoFont, null); } catch (Throwable ignore) {}
                     }
 
-                    // 選項：每行一個、明顯縮排（用較小字級，廚房單用 fKInfo）
+                  // 選項：每行一個、明顯縮排（v20260620 廚房單用獨立的子選項字級 useOptionFont）
                     if (fItemSel && !selections.isEmpty()) {
                         // selections 可能是用 / 或 , 或 ; 分隔的多個，逐一拆開各印一行
                         String[] parts = selections.split("\\s*[/,;、]\\s*");
                         for (String p : parts) {
                             String t = p == null ? "" : p.trim();
                             if (t.isEmpty()) continue;
-                            printerService.printTextWithFont("    - " + t + "\n", null, useInfoFont, null);
+                            printerService.printTextWithFont("    - " + t + "\n", null, useOptionFont, null);
                         }
                     }
+
                     if (fItemNote && !note.isEmpty()) {
                         printerService.printTextWithFont("    備註: " + note + "\n", null, useInfoFont, null);
                     }
