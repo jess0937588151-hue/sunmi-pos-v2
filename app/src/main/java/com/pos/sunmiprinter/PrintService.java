@@ -30,9 +30,10 @@ import java.util.Enumeration;
 /**
  * 後台 Foreground Service
  * - 開機自動啟動（由 BootReceiver 觸發）
- * - 持有 PrintHttpServer、三種 PrinterManager
+ * - 持有 PrintHttpServer（8080）、DisplayHttpServer（8081）、三種 PrinterManager
  * - START_STICKY 保持常駐，被殺掉後自動重啟
  * - v20260531: 新增 reconnectPrinters() 供設定頁儲存後重新連線藍牙/網路
+ * - v20260602: 客顯 DisplayHttpServer（8081）移入本 Service 常駐，與列印 server 同生命週期
  */
 public class PrintService extends Service {
 
@@ -51,6 +52,7 @@ public class PrintService extends Service {
 
     // ── 核心元件 ──
     private PrintHttpServer httpServer;
+    private DisplayHttpServer displayHttpServer;   // v20260602 客顯 server（移入 Service 常駐）
     private SunmiPrinterManager sunmiPrinter;
     private BluetoothPrinterManager btPrinter;
     private NetworkPrinterManager netPrinter;
@@ -93,6 +95,9 @@ public class PrintService extends Service {
 
         // 啟動 HTTP Server
         startHttpServer();
+
+        // v20260602 啟動客顯 HTTP Server（8081），與列印 server 同生命週期常駐
+        startDisplayServer();
             // 取得 PARTIAL_WAKE_LOCK，避免螢幕關掉時 NanoHTTPD 接收延遲
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -135,6 +140,7 @@ public class PrintService extends Service {
     public void onDestroy() {
         Log.d(TAG, "onDestroy");
         stopHttpServer();
+        stopDisplayServer();   // v20260602
         if (sunmiPrinter != null) sunmiPrinter.unbind();
         if (btPrinter != null) btPrinter.disconnect();
         if (netPrinter != null) netPrinter.disconnect();
@@ -202,6 +208,38 @@ public class PrintService extends Service {
             serverRunning = false;
             Log.d(TAG, "HTTP Server stopped");
             LogManager.i(TAG, "HTTP Server stopped");
+        }
+    }
+
+    // ==================== 客顯 HTTP Server（v20260602 移入 Service 常駐）====================
+
+    private void startDisplayServer() {
+        try {
+            if (displayHttpServer != null && displayHttpServer.isAlive()) {
+                LogManager.i(TAG, "DisplayHttpServer already running");
+                return;
+            }
+            displayHttpServer = new DisplayHttpServer(DisplayHttpServer.DEFAULT_PORT);
+            // 非 daemon thread，避免 Android 7.1 被回收；逾時 5 秒
+            displayHttpServer.start(5000, false);
+            DisplayStateManager.reset();
+            Log.d(TAG, "DisplayHttpServer started on 0.0.0.0:" + DisplayHttpServer.DEFAULT_PORT);
+            LogManager.i(TAG, "DisplayHttpServer started on 0.0.0.0:" + DisplayHttpServer.DEFAULT_PORT);
+        } catch (Throwable t) {
+            LogManager.e(TAG, "DisplayHttpServer start failed", t);
+        }
+    }
+
+    private void stopDisplayServer() {
+        if (displayHttpServer != null) {
+            try {
+                displayHttpServer.stop();
+                DisplayStateManager.reset();
+                LogManager.i(TAG, "DisplayHttpServer stopped");
+            } catch (Throwable t) {
+                LogManager.w(TAG, "stop displayHttpServer error: " + t.getMessage());
+            }
+            displayHttpServer = null;
         }
     }
 
