@@ -98,6 +98,9 @@ public class PrintService extends Service {
 
         // v20260602 啟動客顯 HTTP Server（8081），與列印 server 同生命週期常駐
         startDisplayServer();
+        handler.postDelayed(displayWatchdog, DISPLAY_WATCHDOG_MS);
+if (handler != null) handler.removeCallbacks(displayWatchdog);
+
             // 取得 PARTIAL_WAKE_LOCK，避免螢幕關掉時 NanoHTTPD 接收延遲
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -214,21 +217,29 @@ public class PrintService extends Service {
     // ==================== 客顯 HTTP Server（v20260602 移入 Service 常駐）====================
 
     private void startDisplayServer() {
+    final int MAX_TRY = 10;
+    final long RETRY_WAIT_MS = 200;
+    for (int attempt = 1; attempt <= MAX_TRY; attempt++) {
+        // 每次都先確保舊的停掉、socket 釋放（解決 START_STICKY 重啟時 Address already in use）
+        stopDisplayServer();
         try {
-            if (displayHttpServer != null && displayHttpServer.isAlive()) {
-                LogManager.i(TAG, "DisplayHttpServer already running");
-                return;
-            }
             displayHttpServer = new DisplayHttpServer(DisplayHttpServer.DEFAULT_PORT);
-            // 非 daemon thread，避免 Android 7.1 被回收；逾時 5 秒
-            displayHttpServer.start(5000, false);
+            displayHttpServer.start(5000, false); // 非 daemon thread
             DisplayStateManager.reset();
-            Log.d(TAG, "DisplayHttpServer started on 0.0.0.0:" + DisplayHttpServer.DEFAULT_PORT);
-            LogManager.i(TAG, "DisplayHttpServer started on 0.0.0.0:" + DisplayHttpServer.DEFAULT_PORT);
+            LogManager.i(TAG, "DisplayHttpServer started on 0.0.0.0:"
+                    + DisplayHttpServer.DEFAULT_PORT + " (attempt " + attempt + ")");
+            return; // 成功就結束
         } catch (Throwable t) {
-            LogManager.e(TAG, "DisplayHttpServer start failed", t);
+            LogManager.e(TAG, "DisplayHttpServer start failed (attempt "
+                    + attempt + "/" + MAX_TRY + ")", t);
+            displayHttpServer = null;
+            if (attempt < MAX_TRY) {
+                try { Thread.sleep(RETRY_WAIT_MS); } catch (InterruptedException ignored) {}
+            }
         }
     }
+}
+
 
     private void stopDisplayServer() {
         if (displayHttpServer != null) {
@@ -242,6 +253,22 @@ public class PrintService extends Service {
             displayHttpServer = null;
         }
     }
+// v20260602b: 客顯 server 看門狗——每 30 秒檢查 8081 是否還活著，掛了就自動重啟
+private static final long DISPLAY_WATCHDOG_MS = 30000;
+private final Runnable displayWatchdog = new Runnable() {
+    @Override public void run() {
+        try {
+            if (displayHttpServer == null || !displayHttpServer.isAlive()) {
+                LogManager.w(TAG, "DisplayHttpServer 已停止，watchdog 自動重啟");
+                startDisplayServer();
+            }
+        } catch (Throwable t) {
+            LogManager.w(TAG, "display watchdog error: " + t.getMessage());
+        } finally {
+            if (handler != null) handler.postDelayed(this, DISPLAY_WATCHDOG_MS);
+        }
+    }
+};
 
 
     /** 埠號設定變更時呼叫 */
