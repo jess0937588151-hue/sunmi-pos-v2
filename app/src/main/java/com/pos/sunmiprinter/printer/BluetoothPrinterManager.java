@@ -187,7 +187,7 @@ public class BluetoothPrinterManager {
         });
     }
 
-        public boolean printPosReceipt(String jsonStr) {
+            public boolean printPosReceipt(String jsonStr) {
         return retry(() -> {
             JSONObject data = new JSONObject(jsonStr);
             // mode=="kitchen" 直接轉廚房格式，避免印出金額/合計/謝謝光臨
@@ -195,90 +195,149 @@ public class BluetoothPrinterManager {
                 printKitchenReceipt(jsonStr);
                 return;
             }
+            // v20260620 顧客單：讀 fields 開關，未勾選的欄位一律不印（修藍牙不照欄位篩選/亂印金額）
+            JSONObject f = data.optJSONObject("fields");
             write(ESC_INIT);
 
-
             // 店名
-            write(ESC_CENTER);
-            write(GS_DOUBLE_SIZE);
-            write(data.optString("shopName", "POS").getBytes(GBK));
-            write(LF);
-            write(GS_NORMAL_SIZE);
+            if (fieldOn(f, "storeName")) {
+                write(ESC_CENTER);
+                write(GS_DOUBLE_SIZE);
+                write(data.optString("shopName", "POS").getBytes(GBK));
+                write(LF);
+                write(GS_NORMAL_SIZE);
+            }
 
             // 副标题
             String subtitle = data.optString("subtitle", "");
             if (!subtitle.isEmpty()) {
+                write(ESC_CENTER);
                 write(subtitle.getBytes(GBK));
                 write(LF);
             }
 
+            write(ESC_LEFT);
+            if (fieldOn(f, "storePhone")) writeLineIfNotEmpty("电话: ", data.optString("shopPhone", ""));
+            if (fieldOn(f, "storeAddress")) writeLineIfNotEmpty("地址: ", data.optString("shopAddress", ""));
+
             write(SEPARATOR.getBytes(GBK));
             write(LF);
-            write(ESC_LEFT);
 
-            // 订单资讯
-            writeLineIfNotEmpty("单号: ", data.optString("orderNumber", ""));
-            writeLineIfNotEmpty("时间: ", data.optString("dateTime", ""));
-            writeLineIfNotEmpty("类型: ", data.optString("orderType", ""));
-            writeLineIfNotEmpty("付款: ", data.optString("paymentMethod", ""));
+            // 订单资讯（各自看 fields）
+            if (fieldOn(f, "orderNo"))        writeLineIfNotEmpty("单号: ", data.optString("orderNumber", ""));
+            if (fieldOn(f, "dateTime"))       writeLineIfNotEmpty("时间: ", data.optString("dateTime", ""));
+            if (fieldOn(f, "orderType"))      writeLineIfNotEmpty("类型: ", data.optString("orderType", ""));
+            if (fieldOn(f, "paymentMethod"))  writeLineIfNotEmpty("付款: ", data.optString("paymentMethod", ""));
+            if (fieldOn(f, "customerInfo")) {
+                writeLineIfNotEmpty("顾客: ", data.optString("customerName", ""));
+                writeLineIfNotEmpty("电话: ", data.optString("customerPhoneMasked", ""));
+            }
 
             write(SEPARATOR.getBytes(GBK));
             write(LF);
 
             // 品项
+            boolean showItems = fieldOn(f, "items");
+            boolean showQty   = fieldOn(f, "itemQty");
+            boolean showPrice = fieldOn(f, "itemPrice");
+            boolean showSel   = fieldOn(f, "itemSelections");
+            boolean showNote  = fieldOn(f, "itemNote");
             JSONArray items = data.optJSONArray("items");
-            if (items != null) {
+            if (showItems && items != null) {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.getJSONObject(i);
                     String name = item.optString("name", "");
                     int qty = item.optInt("qty", 0);
                     int price = item.optInt("price", 0);
 
-                    String left = name + " x" + qty;
-                    String right = "$" + price;
+                    String left = name + (showQty ? " x" + qty : "");
+                    String right = showPrice ? ("$" + price) : "";
                     int pad = 32 - left.length() - right.length();
+                    if (pad < 1) pad = 1;
                     StringBuilder sb = new StringBuilder(left);
                     for (int p = 0; p < pad; p++) sb.append(' ');
                     sb.append(right);
                     write(sb.toString().getBytes(GBK));
                     write(LF);
 
-                    String options = item.optString("options", "");
-                    if (!options.isEmpty()) {
-                        write(("  " + options).getBytes(GBK));
-                        write(LF);
+                    if (showSel) {
+                        String options = item.optString("options", "");
+                        if (!options.isEmpty()) {
+                            write(("  " + options).getBytes(GBK));
+                            write(LF);
+                        }
                     }
+                    if (showNote) {
+                        String note = item.optString("note", "");
+                        if (!note.isEmpty()) {
+                            write(("  备注: " + note).getBytes(GBK));
+                            write(LF);
+                        }
+                    }
+                }
+            }
+
+            // 整单备注
+            if (fieldOn(f, "orderNote")) {
+                String cNote = data.optString("customerNote", "");
+                if (!cNote.isEmpty()) {
+                    write(SEPARATOR.getBytes(GBK));
+                    write(LF);
+                    write(("整单备注: " + cNote).getBytes(GBK));
+                    write(LF);
                 }
             }
 
             write(SEPARATOR.getBytes(GBK));
             write(LF);
 
-            // 总计
+            // 金额（各自看 fields，未勾选不印）
             write(ESC_RIGHT);
-            write(GS_DOUBLE_SIZE);
-            write(("合计: $" + data.optString("total", "0")).getBytes(GBK));
-            write(LF);
-            write(GS_NORMAL_SIZE);
+            if (fieldOn(f, "subtotal")) {
+                String st = data.optString("subtotal", "0");
+                if (!"0".equals(st) && !st.isEmpty()) { write(("小计: $" + st).getBytes(GBK)); write(LF); }
+            }
+            if (fieldOn(f, "discount")) {
+                String dc = data.optString("discountAmount", "0");
+                if (!"0".equals(dc) && !dc.isEmpty()) { write(("折扣: -$" + dc).getBytes(GBK)); write(LF); }
+            }
+            if (fieldOn(f, "total")) {
+                write(GS_DOUBLE_SIZE);
+                write(("合计: $" + data.optString("total", "0")).getBytes(GBK));
+                write(LF);
+                write(GS_NORMAL_SIZE);
+            }
             write(ESC_LEFT);
 
-            write(SEPARATOR.getBytes(GBK));
-            write(LF);
-            write(ESC_CENTER);
-            write("谢谢光临".getBytes(GBK));
-            write(LF);
-            write(ESC_LEFT);
+            // 页尾（footer，未勾选不印；取代写死的「谢谢光临」）
+            if (fieldOn(f, "footer")) {
+                String footer = data.optString("footer", "");
+                if (!footer.isEmpty()) {
+                    write(SEPARATOR.getBytes(GBK));
+                    write(LF);
+                    write(ESC_CENTER);
+                    write(footer.getBytes(GBK));
+                    write(LF);
+                    write(ESC_LEFT);
+                }
+            }
 
             feedAndCut();
-            openCashDrawer();
+            // 开钱箱只在 payload 要求时（廚房單不会带 openDrawer=true）
+            if (data.optBoolean("openDrawer", false)) openCashDrawer();
 
-            Log.d(TAG, "BT POS receipt printed");
+            Log.d(TAG, "BT POS receipt printed (fields applied)");
         });
     }
 
-    public boolean printKitchenReceipt(String jsonStr) {
+
+       public boolean printKitchenReceipt(String jsonStr) {
         return retry(() -> {
             JSONObject data = new JSONObject(jsonStr);
+            // v20260620 廚房單：讀 fields 開關 + 字級點數（修不照欄位篩選/字體沒放大）
+            JSONObject f = data.optJSONObject("fields");
+            int fKItem   = data.optInt("fontKitchenItem", 32); // 品名字級點數
+            int fKInfo   = data.optInt("fontKitchenInfo", 24); // 選項/資訊字級點數
             write(ESC_INIT);
 
             // 标题
@@ -288,38 +347,73 @@ public class BluetoothPrinterManager {
             write(LF);
             write(GS_NORMAL_SIZE);
 
-            String shopName = data.optString("shopName", "");
-            if (!shopName.isEmpty()) {
-                write(shopName.getBytes(GBK));
-                write(LF);
+            if (fieldOn(f, "storeName")) {
+                String shopName = data.optString("shopName", "");
+                if (!shopName.isEmpty()) {
+                    write(shopName.getBytes(GBK));
+                    write(LF);
+                }
             }
 
             write(SEPARATOR.getBytes(GBK));
             write(LF);
             write(ESC_LEFT);
 
-            writeLineIfNotEmpty("单号: ", data.optString("orderNumber", ""));
-            writeLineIfNotEmpty("时间: ", data.optString("dateTime", ""));
-            writeLineIfNotEmpty("类型: ", data.optString("orderType", ""));
+            if (fieldOn(f, "orderNo"))   writeLineIfNotEmpty("单号: ", data.optString("orderNumber", ""));
+            if (fieldOn(f, "dateTime"))  writeLineIfNotEmpty("时间: ", data.optString("dateTime", ""));
+            if (fieldOn(f, "orderType")) writeLineIfNotEmpty("类型: ", data.optString("orderType", ""));
+            if (fieldOn(f, "customerInfo")) {
+                writeLineIfNotEmpty("顾客: ", data.optString("customerName", ""));
+            }
 
             write(SEPARATOR.getBytes(GBK));
             write(LF);
 
-            // 品项
+            // 品项（品名套 fontKitchenItem、选项套 fontKitchenInfo；字级换算成 ESC/POS 倍率）
+            boolean showItems = fieldOn(f, "items");
+            boolean showQty   = fieldOn(f, "itemQty");
+            boolean showSel   = fieldOn(f, "itemSelections");
+            boolean showNote  = fieldOn(f, "itemNote");
             JSONArray items = data.optJSONArray("items");
-            if (items != null) {
+            if (showItems && items != null) {
                 for (int i = 0; i < items.length(); i++) {
                     JSONObject item = items.getJSONObject(i);
-                    write(GS_DOUBLE_SIZE);
-                    write((item.optString("name", "") + " x" + item.optInt("qty", 0)).getBytes(GBK));
+                    // 品名：用品名字级
+                    write(gsSizeByPoint(fKItem));
+                    String nameLine = item.optString("name", "") + (showQty ? " x" + item.optInt("qty", 0) : "");
+                    write(nameLine.getBytes(GBK));
                     write(LF);
                     write(GS_NORMAL_SIZE);
 
-                    String options = item.optString("options", "");
-                    if (!options.isEmpty()) {
-                        write(("  " + options).getBytes(GBK));
-                        write(LF);
+                    // 选项：用资讯字级
+                    if (showSel) {
+                        String options = item.optString("options", "");
+                        if (!options.isEmpty()) {
+                            write(gsSizeByPoint(fKInfo));
+                            write(("  " + options).getBytes(GBK));
+                            write(LF);
+                            write(GS_NORMAL_SIZE);
+                        }
                     }
+                    // 备注：用资讯字级
+                    if (showNote) {
+                        String note = item.optString("note", "");
+                        if (!note.isEmpty()) {
+                            write(gsSizeByPoint(fKInfo));
+                            write(("  备注: " + note).getBytes(GBK));
+                            write(LF);
+                            write(GS_NORMAL_SIZE);
+                        }
+                    }
+                }
+            }
+
+            // 整单备注
+            if (fieldOn(f, "orderNote")) {
+                String cNote = data.optString("customerNote", "");
+                if (!cNote.isEmpty()) {
+                    write(("整单备注: " + cNote).getBytes(GBK));
+                    write(LF);
                 }
             }
 
@@ -329,9 +423,10 @@ public class BluetoothPrinterManager {
             feedAndCut();
             buzzer();
 
-            Log.d(TAG, "BT kitchen receipt printed");
+            Log.d(TAG, "BT kitchen receipt printed (fields + font applied)");
         });
     }
+
 
     // ==================== 硬体控制 ====================
 
