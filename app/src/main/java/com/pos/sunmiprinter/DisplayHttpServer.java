@@ -401,6 +401,9 @@ public class DisplayHttpServer extends NanoHTTPD {
 "  $('idleStoreName').textContent=d.storeName||'" + escapeJs(storeName) + "';\n" +
 "  $('idleMsg').textContent=d.idleMessage||d.message||'歡迎光臨';\n" +
 "  setupSlides(d.slides);\n" +
+"  var hasSlides=Array.isArray(d.slides)&&d.slides.length>0;\n" +
+"  var ov=document.querySelector('.idle-overlay');\n" +
+"  if(ov)ov.style.display=hasSlides?'none':'flex';\n" +
 "}\n" +
 "\n" +
 "/* 主輪詢 */\n" +
