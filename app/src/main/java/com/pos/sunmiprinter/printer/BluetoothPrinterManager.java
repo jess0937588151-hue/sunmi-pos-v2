@@ -492,12 +492,24 @@ public class BluetoothPrinterManager {
     private static final String SEPARATOR = "--------------------------------";
    
 
-    // ==================== 内部工具 ====================
+        // ==================== 内部工具 ====================
+
+    /**
+     * v20260620 讀 payload 的 fields 開關。
+     * fields 不存在（舊版 POS 沒送）→ 視為全印（回 true），維持相容；
+     * 存在 → 讀該欄位，缺哪個欄位也預設 true（跟 Sunmi 端 optBoolean(...,true) 一致）。
+     */
+    private boolean fieldOn(JSONObject fields, String key) {
+        if (fields == null) return true;
+        return fields.optBoolean(key, true);
+    }
+
     private void write(byte[] data) throws IOException {
         if (outputStream == null) throw new IOException("Not connected");
         outputStream.write(data);
         outputStream.flush();
     }
+
 
     private void writeLineIfNotEmpty(String label, String value) throws IOException {
         if (!value.isEmpty()) {
