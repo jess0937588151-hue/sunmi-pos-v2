@@ -164,7 +164,7 @@ public class DisplayHttpServer extends NanoHTTPD {
 "/* 購物車畫面：左購物車 + 右輪播 */\n" +
 "#screenCart{background:var(--bg-cart);color:var(--text-dark);\n" +
 "  flex-direction:row;align-items:stretch;justify-content:stretch;padding:0;}\n" +
-".cart-left{flex:1;display:flex;flex-direction:column;\n" +
+".cart-left{flex:0 0 55%;display:flex;flex-direction:column;\n" +
 "  padding:clamp(14px,2.5vw,40px);overflow:hidden;}\n" +
 ".cart-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;}\n" +
 ".cart-store{font-size:clamp(16px,2vw,28px);font-weight:800;color:var(--primary);}\n" +
@@ -193,10 +193,10 @@ public class DisplayHttpServer extends NanoHTTPD {
 ".ctb-total{font-size:clamp(28px,4vw,56px);font-weight:900;line-height:1;\n" +
 "  letter-spacing:-.02em;}\n" +
 "/* 右輪播 */\n" +
-".cart-right{width:clamp(200px,38vw,560px);background:#0f172a;flex-shrink:0;\n" +
+".cart-right{flex:0 0 45%;background:#0f172a;flex-shrink:0;\n" +
 "  position:relative;overflow:hidden;}\n" +
 ".cart-right.hidden{display:none;}\n" +
-".cart-right img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;\n" +
+".cart-right img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;\n" +
 "  opacity:0;transition:opacity 1s ease;}\n" +
 ".cart-right img.show{opacity:1;}\n" +
 "\n" +
