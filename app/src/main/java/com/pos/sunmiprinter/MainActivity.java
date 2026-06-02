@@ -27,6 +27,7 @@ import android.provider.Settings;
 
 /**
  * MainActivity — 健康檢查頁（v20260603 項目 8）
+ * v20260602: 客顯 server 改由 PrintService 常駐，本頁不再啟動/停止 DisplayHttpServer
  * 四區塊：
  *  1) APK 版本 + Server 狀態 + 本機 IP
  *  2) 三台印表機狀態（每 3 秒刷新）含 paperOut/coverOpen/overheat 警示
@@ -36,12 +37,8 @@ import android.provider.Settings;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
-    private static final String APK_VERSION = "v20260525"; // ← 版號同步升至 v20260525
+    private static final String APK_VERSION = "v20260602"; // ← 版號同步升至 v20260602
     private static final long REFRESH_INTERVAL_MS = 3000;
-
-    // ── 客顯 HTTP Server（v20260525 新增） ──
-    private DisplayHttpServer displayHttpServer;
-
 
     private static final int COLOR_TEXT    = Color.parseColor("#212121");
     private static final int COLOR_HINT    = Color.parseColor("#757575");
@@ -67,11 +64,11 @@ public class MainActivity extends AppCompatActivity {
 
     // ── 區塊 4：按鈕 ──
     private Button btnTestPrint;
-private Button btnRestartService;
-private Button btnViewLogs;
-private Button btnSettings;
-private Button btnToggleService;
-private Button btnBatteryWhitelist;
+    private Button btnRestartService;
+    private Button btnViewLogs;
+    private Button btnSettings;
+    private Button btnToggleService;
+    private Button btnBatteryWhitelist;
 
 
     // ── Service 綁定 ──
@@ -112,7 +109,7 @@ private Button btnBatteryWhitelist;
         buildUi();
         ensureServiceRunning();
         bindToService();
-        startDisplayServer(); // ← v20260525 新增
+        // v20260602 移除：客顯 server 已改由 PrintService 常駐，不再於此啟動
     }
 
     @Override
@@ -134,17 +131,7 @@ private Button btnBatteryWhitelist;
             unbindService(serviceConnection);
             serviceBound = false;
         }
-        // v20260525 新增：停止客顯 Server
-        if (displayHttpServer != null) {
-            try {
-                displayHttpServer.stop();
-                DisplayStateManager.reset();
-                LogManager.i("MainActivity", "DisplayHttpServer stopped");
-            } catch (Throwable t) {
-                LogManager.w("MainActivity", "DisplayHttpServer stop failed: " + t.getMessage());
-            }
-            displayHttpServer = null;
-        }
+        // v20260602 移除：客顯 server 由 PrintService 管理，本頁關閉不應停止客顯
     }
 
     // ==================== 建立 UI ====================
@@ -261,14 +248,14 @@ private Button btnBatteryWhitelist;
         btnRow2.addView(btnSettings);
         root.addView(btnRow2);
 
-                // 第三排：電池優化白名單（防止系統殺掉服務）
+        // 第三排：電池優化白名單（防止系統殺掉服務）
         LinearLayout btnRow3 = horizontal();
         btnBatteryWhitelist = makeButton("🔋 防止系統關閉服務", COLOR_RED);
         btnBatteryWhitelist.setOnClickListener(v -> requestIgnoreBatteryOptimizations());
         btnRow3.addView(btnBatteryWhitelist);
         root.addView(btnRow3);
 
-                // 第四排：字體大小設定（v20260608）
+        // 第四排：字體大小設定（v20260608）
         LinearLayout btnRow4 = horizontal();
         Button btnFontSize = makeButton("🔤 字體大小設定", COLOR_SECTION);
         btnFontSize.setOnClickListener(v -> {
@@ -287,23 +274,6 @@ private Button btnBatteryWhitelist;
 
         scroll.addView(root);
         setContentView(scroll);
-    }
-    // ==================== 客顯 Server（v20260525 新增） ====================
-
-    private void startDisplayServer() {
-        try {
-            if (displayHttpServer != null && displayHttpServer.isAlive()) {
-                LogManager.i("MainActivity", "DisplayHttpServer already running");
-                return;
-            }
-            displayHttpServer = new DisplayHttpServer(DisplayHttpServer.DEFAULT_PORT);
-            displayHttpServer.start(5000, false); // 非 daemon，逾時 5 秒
-            DisplayStateManager.reset();
-            LogManager.i("MainActivity", "DisplayHttpServer started on port "
-                    + DisplayHttpServer.DEFAULT_PORT);
-        } catch (Throwable t) {
-            LogManager.e("MainActivity", "DisplayHttpServer start failed", t);
-        }
     }
 
     // ==================== 服務操作 ====================
@@ -399,6 +369,7 @@ private Button btnBatteryWhitelist;
         }
         showTextDialog("完整日誌", sb.toString());
     }
+
     private void requestIgnoreBatteryOptimizations() {
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -449,7 +420,11 @@ private Button btnBatteryWhitelist;
             tvServiceStatus.setTextColor(running ? COLOR_GREEN : COLOR_RED);
 
             String ipText = "HTTP Server：127.0.0.1:" + port;
-            if (!ip.isEmpty()) ipText += "\n本機 IP：" + ip;
+            if (!ip.isEmpty()) {
+                ipText += "\n本機 IP：" + ip;
+                // v20260602 客顯網址提示：iPad 開此網址即可顯示客顯
+                ipText += "\n客顯網址：http://" + ip + ":" + DisplayHttpServer.DEFAULT_PORT + "/display/";
+            }
             tvIpPort.setText(ipText);
 
             btnToggleService.setText(running ? "停止服務" : "啟動服務");
