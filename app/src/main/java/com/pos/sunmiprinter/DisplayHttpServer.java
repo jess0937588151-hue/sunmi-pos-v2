@@ -8,13 +8,18 @@ import fi.iki.elonen.NanoHTTPD;
 
 /**
  * DisplayHttpServer — 客顯 HTTP Server
- * 版本：v20260525-b
+ * 版本：v20260602
  *
  * 職責：
  *   - 監聽 0.0.0.0:8081（區域網路可存取，iPad 可直接連線）
  *   - 接收 Web POS 傳來的客顯資料（購物車、付款完成、待機畫面）
  *   - 保存最新狀態到 DisplayStateManager，供客顯頁面 polling 取得
  *   - 直接提供客顯 HTML 頁面（解決 HTTPS Mixed Content 問題）
+ *
+ * v20260602 變更：
+ *   - 修正 HTML 內全形 Unicode escape 亂碼（&#８２５３; 等）改為正確半形碼點
+ *   - 版面改為「左半邊購物車 + 合計金額置於左下、右半邊商品圖輪播」
+ *   - 讀取 payload 的 slides（圖片 URL 陣列）做右半邊輪播；無圖時右半邊隱藏、購物車佔滿
  *
  * API 端點：
  *   GET  /display/        — 客顯 HTML 頁面（iPad 直接開啟此網址）
@@ -131,26 +136,32 @@ public class DisplayHttpServer extends NanoHTTPD {
 "}\n" +
 "html,body{width:100%;height:100%;font-family:var(--font);overflow:hidden;\n" +
 "  background:var(--bg-idle);color:var(--text-light);}\n" +
-"\n" +
-"/* ── 畫面切換 ── */\n" +
 ".screen{position:fixed;inset:0;display:flex;flex-direction:column;\n" +
 "  align-items:center;justify-content:center;\n" +
 "  transition:opacity 0.4s ease;opacity:0;pointer-events:none;}\n" +
 ".screen.active{opacity:1;pointer-events:auto;}\n" +
 "\n" +
-"/* ── 待機畫面 ── */\n" +
+"/* 待機畫面 */\n" +
 "#screenIdle{background:var(--bg-idle);gap:20px;}\n" +
 ".idle-logo{font-size:clamp(48px,8vw,96px);}\n" +
 ".idle-store{font-size:clamp(28px,4vw,56px);font-weight:800;color:#fff;letter-spacing:.04em;}\n" +
 ".idle-msg{font-size:clamp(16px,2.2vw,30px);color:#94a3b8;margin-top:4px;}\n" +
 ".idle-time{font-size:clamp(14px,1.6vw,22px);color:#475569;margin-top:28px;\n" +
 "  font-variant-numeric:tabular-nums;}\n" +
-".idle-bar{position:fixed;bottom:0;left:0;right:0;height:4px;\n" +
+"/* 待機輪播：滿版背景圖 */\n" +
+".idle-slides{position:fixed;inset:0;z-index:0;}\n" +
+".idle-slides img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;\n" +
+"  opacity:0;transition:opacity 1s ease;}\n" +
+".idle-slides img.show{opacity:1;}\n" +
+".idle-overlay{position:relative;z-index:1;display:flex;flex-direction:column;\n" +
+"  align-items:center;justify-content:center;gap:20px;\n" +
+"  background:rgba(15,23,42,.55);width:100%;height:100%;}\n" +
+".idle-bar{position:fixed;bottom:0;left:0;right:0;height:4px;z-index:2;\n" +
 "  background:linear-gradient(90deg,#2563eb,#10b981,#f59e0b,#2563eb);\n" +
 "  background-size:300% 100%;animation:shimmer 4s linear infinite;}\n" +
 "@keyframes shimmer{0%{background-position:0% 0%}100%{background-position:300% 0%}}\n" +
 "\n" +
-"/* ── 購物車畫面 ── */\n" +
+"/* 購物車畫面：左購物車 + 右輪播 */\n" +
 "#screenCart{background:var(--bg-cart);color:var(--text-dark);\n" +
 "  flex-direction:row;align-items:stretch;justify-content:stretch;padding:0;}\n" +
 ".cart-left{flex:1;display:flex;flex-direction:column;\n" +
@@ -172,16 +183,24 @@ public class DisplayHttpServer extends NanoHTTPD {
 ".ci-opts{font-size:clamp(11px,1.1vw,15px);color:#64748b;margin-top:2px;}\n" +
 ".ci-price{flex-shrink:0;font-size:clamp(13px,1.5vw,20px);font-weight:700;\n" +
 "  align-self:center;}\n" +
-".cart-right{width:clamp(160px,22vw,300px);background:var(--primary);color:#fff;\n" +
-"  display:flex;flex-direction:column;align-items:center;justify-content:center;\n" +
-"  padding:clamp(14px,2vw,32px);gap:14px;flex-shrink:0;}\n" +
-".cr-label{font-size:clamp(13px,1.4vw,18px);opacity:.85;letter-spacing:.05em;}\n" +
-".cr-total{font-size:clamp(36px,5vw,72px);font-weight:900;line-height:1;\n" +
+"/* 左下合計列 */\n" +
+".cart-total-bar{flex-shrink:0;margin-top:14px;padding:14px 18px;border-radius:14px;\n" +
+"  background:var(--primary);color:#fff;display:flex;align-items:center;\n" +
+"  justify-content:space-between;}\n" +
+".ctb-label{font-size:clamp(13px,1.4vw,20px);opacity:.9;}\n" +
+".ctb-count{font-size:clamp(11px,1.1vw,15px);opacity:.75;\n" +
+"  background:rgba(255,255,255,.15);padding:3px 10px;border-radius:999px;margin-left:10px;}\n" +
+".ctb-total{font-size:clamp(28px,4vw,56px);font-weight:900;line-height:1;\n" +
 "  letter-spacing:-.02em;}\n" +
-".cr-count{font-size:clamp(12px,1.2vw,16px);opacity:.75;\n" +
-"  background:rgba(255,255,255,.15);padding:4px 12px;border-radius:999px;}\n" +
+"/* 右輪播 */\n" +
+".cart-right{width:clamp(200px,38vw,560px);background:#0f172a;flex-shrink:0;\n" +
+"  position:relative;overflow:hidden;}\n" +
+".cart-right.hidden{display:none;}\n" +
+".cart-right img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;\n" +
+"  opacity:0;transition:opacity 1s ease;}\n" +
+".cart-right img.show{opacity:1;}\n" +
 "\n" +
-"/* ── 付款完成畫面 ── */\n" +
+"/* 付款完成畫面 */\n" +
 "#screenPaid{background:var(--bg-paid);gap:18px;}\n" +
 ".paid-icon{font-size:clamp(60px,9vw,112px);animation:popIn .5s cubic-bezier(.34,1.56,.64,1);}\n" +
 "@keyframes popIn{0%{transform:scale(.3);opacity:0}100%{transform:scale(1);opacity:1}}\n" +
@@ -197,22 +216,25 @@ public class DisplayHttpServer extends NanoHTTPD {
 "  transition:stroke-dashoffset 1s linear;}\n" +
 ".cd-text{font-size:clamp(12px,1.2vw,16px);color:#6ee7b7;}\n" +
 "\n" +
-"/* ── 狀態指示 ── */\n" +
+"/* 狀態指示 */\n" +
 "#connDot{position:fixed;bottom:12px;right:16px;width:10px;height:10px;\n" +
-"  border-radius:50%;background:#475569;transition:background .4s;}\n" +
+"  border-radius:50%;background:#475569;transition:background .4s;z-index:3;}\n" +
 "#connDot.ok{background:#10b981;}#connDot.err{background:#ef4444;}\n" +
 "#offlineBanner{position:fixed;bottom:0;left:0;right:0;background:#7f1d1d;\n" +
-"  color:#fca5a5;text-align:center;padding:8px;font-size:13px;display:none;}\n" +
+"  color:#fca5a5;text-align:center;padding:8px;font-size:13px;display:none;z-index:3;}\n" +
 "</style>\n" +
 "</head>\n" +
 "<body>\n" +
 "\n" +
 "<!-- 待機畫面 -->\n" +
 "<div id=\"screenIdle\" class=\"screen active\">\n" +
-"  <div class=\"idle-logo\">&#127869;</div>\n" +
-"  <div class=\"idle-store\" id=\"idleStoreName\">" + escapeHtml(storeName) + "</div>\n" +
-"  <div class=\"idle-msg\"   id=\"idleMsg\">&#27426;&#36814;&#20809;&#８２５３;</div>\n" +
-"  <div class=\"idle-time\"  id=\"idleClock\"></div>\n" +
+"  <div class=\"idle-slides\" id=\"idleSlides\"></div>\n" +
+"  <div class=\"idle-overlay\">\n" +
+"    <div class=\"idle-logo\">&#127869;</div>\n" +
+"    <div class=\"idle-store\" id=\"idleStoreName\">" + escapeHtml(storeName) + "</div>\n" +
+"    <div class=\"idle-msg\"   id=\"idleMsg\">&#27426;&#36814;&#20809;&#33707;</div>\n" +
+"    <div class=\"idle-time\"  id=\"idleClock\"></div>\n" +
+"  </div>\n" +
 "  <div class=\"idle-bar\"></div>\n" +
 "</div>\n" +
 "\n" +
@@ -222,25 +244,25 @@ public class DisplayHttpServer extends NanoHTTPD {
 "    <div class=\"cart-header\">\n" +
 "      <div>\n" +
 "        <div class=\"cart-store\" id=\"cartStoreName\">" + escapeHtml(storeName) + "</div>\n" +
-"        <div class=\"cart-subtitle\">&#30446;&#21069;&#3502;&#2155;&#26126;&#32048;</div>\n" +
+"        <div class=\"cart-subtitle\">&#30446;&#21069;&#35330;&#21934;&#26126;&#32048;</div>\n" +
 "      </div>\n" +
 "    </div>\n" +
 "    <div class=\"cart-items\" id=\"cartItemList\"></div>\n" +
+"    <div class=\"cart-total-bar\">\n" +
+"      <div><span class=\"ctb-label\">&#21512;&#35336;</span><span class=\"ctb-count\" id=\"cartCount\">0 &#20214;</span></div>\n" +
+"      <div class=\"ctb-total\" id=\"cartTotal\">$0</div>\n" +
+"    </div>\n" +
 "  </div>\n" +
-"  <div class=\"cart-right\">\n" +
-"    <div class=\"cr-label\">&#21512;&#12288;&#35336;</div>\n" +
-"    <div class=\"cr-total\" id=\"cartTotal\">$0</div>\n" +
-"    <div class=\"cr-count\" id=\"cartCount\">0 &#20214;</div>\n" +
-"  </div>\n" +
+"  <div class=\"cart-right\" id=\"cartRight\"></div>\n" +
 "</div>\n" +
 "\n" +
 "<!-- 付款完成畫面 -->\n" +
 "<div id=\"screenPaid\" class=\"screen\">\n" +
 "  <div class=\"paid-icon\">&#9989;</div>\n" +
-"  <div class=\"paid-title\">&#24863;&#35614;&#24785;&#39006;&#65281;</div>\n" +
+"  <div class=\"paid-title\">&#24863;&#35613;&#24800;&#3915;&#65281;</div>\n" +
 "  <div class=\"paid-amount\"  id=\"paidAmount\">$0</div>\n" +
-"  <div class=\"paid-method\"  id=\"paidMethod\">&#29616;&#37329;</div>\n" +
-"  <div class=\"paid-thank\"   id=\"paidThank\">&#26399;&#24453;&#24744;&#20877;&#27425;&#20809;&#８２５３;</div>\n" +
+"  <div class=\"paid-method\"  id=\"paidMethod\">&#29694;&#37329;</div>\n" +
+"  <div class=\"paid-thank\"   id=\"paidThank\">&#26399;&#24453;&#24744;&#20877;&#27425;&#20809;&#33707;</div>\n" +
 "  <div class=\"paid-cd\">\n" +
 "    <svg width=\"48\" height=\"48\" viewBox=\"0 0 48 48\">\n" +
 "      <circle class=\"cd-track\" cx=\"24\" cy=\"24\" r=\"20\"/>\n" +
@@ -252,11 +274,12 @@ public class DisplayHttpServer extends NanoHTTPD {
 "</div>\n" +
 "\n" +
 "<div id=\"connDot\"></div>\n" +
-"<div id=\"offlineBanner\">&#9888;&#65039; &#28961;&#27861;&#36899;&#32267;&#33267; APK &#23458;&#39023; Server</div>\n" +
+"<div id=\"offlineBanner\">&#9888;&#65039; &#28961;&#27861;&#36899;&#32218;&#33267; APK &#23458;&#39023; Server</div>\n" +
 "\n" +
 "<script>\n" +
-"var POLL_MS=1000,PAID_STAY=5,CIRC=125.66;\n" +
+"var POLL_MS=1000,PAID_STAY=5,CIRC=125.66,SLIDE_MS=4000;\n" +
 "var cur='idle',paidTmr=null,paidLeft=0,lastJson='',connOk=false;\n" +
+"var slideUrls=[],slideKey='',slideTmr=null,slideIdx=0;\n" +
 "function $(id){return document.getElementById(id);}\n" +
 "function esc(s){return String(s==null?'':s)\n" +
 "  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')\n" +
@@ -294,6 +317,42 @@ public class DisplayHttpServer extends NanoHTTPD {
 "  $('offlineBanner').style.display=ok?'none':'block';\n" +
 "}\n" +
 "\n" +
+"/* 輪播圖：依 slides 陣列建立 img，輪流淡入淡出。\n" +
+"   key 比對避免每次 poll 都重建 DOM 造成閃爍。 */\n" +
+"function setupSlides(urls){\n" +
+"  var key=(urls||[]).join('|');\n" +
+"  if(key===slideKey)return;\n" +
+"  slideKey=key;\n" +
+"  slideUrls=Array.isArray(urls)?urls:[];\n" +
+"  if(slideTmr){clearInterval(slideTmr);slideTmr=null;}\n" +
+"  slideIdx=0;\n" +
+"  var right=$('cartRight'),idle=$('idleSlides');\n" +
+"  right.innerHTML='';idle.innerHTML='';\n" +
+"  if(slideUrls.length===0){\n" +
+"    right.classList.add('hidden');\n" +
+"    return;\n" +
+"  }\n" +
+"  right.classList.remove('hidden');\n" +
+"  slideUrls.forEach(function(u,i){\n" +
+"    var a=document.createElement('img');a.src=u;if(i===0)a.className='show';\n" +
+"    a.onerror=function(){a.style.display='none';};\n" +
+"    right.appendChild(a);\n" +
+"    var b=document.createElement('img');b.src=u;if(i===0)b.className='show';\n" +
+"    b.onerror=function(){b.style.display='none';};\n" +
+"    idle.appendChild(b);\n" +
+"  });\n" +
+"  if(slideUrls.length>1){\n" +
+"    slideTmr=setInterval(function(){\n" +
+"      var rImgs=right.children,iImgs=idle.children;\n" +
+"      if(rImgs[slideIdx])rImgs[slideIdx].classList.remove('show');\n" +
+"      if(iImgs[slideIdx])iImgs[slideIdx].classList.remove('show');\n" +
+"      slideIdx=(slideIdx+1)%slideUrls.length;\n" +
+"      if(rImgs[slideIdx])rImgs[slideIdx].classList.add('show');\n" +
+"      if(iImgs[slideIdx])iImgs[slideIdx].classList.add('show');\n" +
+"    },SLIDE_MS);\n" +
+"  }\n" +
+"}\n" +
+"\n" +
 "/* 渲染：購物車 */\n" +
 "function renderCart(d){\n" +
 "  $('cartStoreName').textContent=d.storeName||'" + escapeJs(storeName) + "';\n" +
@@ -316,6 +375,7 @@ public class DisplayHttpServer extends NanoHTTPD {
 "      '<div class=\"ci-price\">'+money(up*q)+'</div>';\n" +
 "    list.appendChild(div);\n" +
 "  });\n" +
+"  setupSlides(d.slides);\n" +
 "}\n" +
 "\n" +
 "/* 渲染：付款完成 */\n" +
@@ -339,12 +399,13 @@ public class DisplayHttpServer extends NanoHTTPD {
 "/* 渲染：待機 */\n" +
 "function renderIdle(d){\n" +
 "  $('idleStoreName').textContent=d.storeName||'" + escapeJs(storeName) + "';\n" +
-"  $('idleMsg').textContent=d.idleMessage||'歡迎光臨';\n" +
+"  $('idleMsg').textContent=d.idleMessage||d.message||'歡迎光臨';\n" +
+"  setupSlides(d.slides);\n" +
 "}\n" +
 "\n" +
 "/* 主輪詢 */\n" +
 "function poll(){\n" +
-"  fetch('/display/state',{cache:'no-store',signal:AbortSignal.timeout(900)})\n" +
+"  fetch('/display/state',{cache:'no-store'})\n" +
 "  .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.text();})\n" +
 "  .then(function(txt){\n" +
 "    setConn(true);\n" +
@@ -375,7 +436,7 @@ public class DisplayHttpServer extends NanoHTTPD {
         sb.append("\"ok\":true,");
         sb.append("\"service\":\"display\",");
         sb.append("\"port\":").append(DEFAULT_PORT).append(",");
-        sb.append("\"version\":\"v20260525-b\",");
+        sb.append("\"version\":\"v20260602\",");
         sb.append("\"stateType\":\"").append(escape(DisplayStateManager.getType())).append("\",");
         sb.append("\"updatedAt\":").append(DisplayStateManager.getUpdatedAt());
         sb.append("}");
