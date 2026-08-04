@@ -89,9 +89,7 @@ public class DisplayHttpServer extends NanoHTTPD {
                 return cors(json(false, null, "unauthorized"));
             }
 
-            if (Method.POST.equals(method) && "/display/update".equals(uri)) {
-                return handleUpdate(session);
-            }
+            
 
             LogManager.w(TAG, "display not found: " + method + " " + uri);
             return cors(json(false, null, "not found: " + uri));
