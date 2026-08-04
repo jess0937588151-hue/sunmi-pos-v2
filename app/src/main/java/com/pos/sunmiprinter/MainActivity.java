@@ -109,6 +109,26 @@ public class MainActivity extends AppCompatActivity {
         buildUi();
         ensureServiceRunning();
         bindToService();
+                // ── v20260731 偵測副螢幕：確認 T2 客顯是不是獨立 Display ──
+        try {
+            android.hardware.display.DisplayManager dm =
+                (android.hardware.display.DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            android.view.Display[] ds = dm.getDisplays();
+            LogManager.i("DISPLAY", "display count = " + ds.length);
+            for (android.view.Display d : ds) {
+                LogManager.i("DISPLAY", "id=" + d.getDisplayId()
+                    + " name=" + d.getName() + " state=" + d.getState());
+            }
+            android.view.Display[] pres = dm.getDisplays(
+                android.hardware.display.DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+            LogManager.i("DISPLAY", "presentation display count = " + pres.length);
+            for (android.view.Display d : pres) {
+                LogManager.i("DISPLAY", "PRESENTATION id=" + d.getDisplayId() + " name=" + d.getName());
+            }
+        } catch (Throwable t) {
+            LogManager.e("DISPLAY", "detect display failed", t);
+        }
+
         // v20260602 移除：客顯 server 已改由 PrintService 常駐，不再於此啟動
     }
 
