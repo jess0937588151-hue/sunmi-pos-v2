@@ -24,7 +24,6 @@ import android.net.Uri;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.app.Presentation;
-import android.content.Context;
 import android.hardware.display.DisplayManager;
 import android.view.Display;
 import android.webkit.WebView;
@@ -160,7 +159,6 @@ private DisplayManager.DisplayListener displayListener;
     }
 
     @Override
-        @Override
     protected void onDestroy() {
         super.onDestroy();
         // v20260804: 收掉副螢幕客顯
@@ -178,7 +176,7 @@ private DisplayManager.DisplayListener displayListener;
         }
     }
 
-        // ============ v20260804 副螢幕客顯（Presentation + WebView，免 overlay 權限）============
+   
 
     private class CustomerPresentation extends Presentation {
         CustomerPresentation(Context ctx, Display display) { super(ctx, display); }
