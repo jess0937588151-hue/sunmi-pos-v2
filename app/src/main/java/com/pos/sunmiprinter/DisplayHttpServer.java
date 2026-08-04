@@ -25,7 +25,7 @@ import fi.iki.elonen.NanoHTTPD;
  *   GET  /display/        — 客顯 HTML 頁面（iPad 直接開啟此網址）
  *   POST /display/update  — Web POS 推送最新客顯資料（需 X-API-Token）
  *   GET  /display/state   — 客顯頁面輪詢取得最新狀態（無需 Token）
- *   GET  /display/ping    — 心跳（無需 Token）
+ *   GET  /display/ping    — 更新（無需 Token）
  *   OPTIONS *             — CORS preflight
  *
  * iPad 使用方式：
@@ -67,7 +67,7 @@ public class DisplayHttpServer extends NanoHTTPD {
                 return handleDisplayPage();
             }
 
-            // 心跳
+            // 更新
             if (Method.GET.equals(method) && "/display/ping".equals(uri)) {
                 return handlePing();
             }
@@ -76,6 +76,12 @@ public class DisplayHttpServer extends NanoHTTPD {
             if (Method.GET.equals(method) && "/display/state".equals(uri)) {
                 return handleGetState();
             }
+            
+            // v20260804: 客顯更新免 Token（僅本機/區網 WebView 與自家 POS 使用）
+            if (Method.POST.equals(method) && "/display/update".equals(uri)) {
+            return handleUpdate(session);
+        }
+
 
             // ── 需要 Token 的端點 ──
             if (!checkToken(session)) {
@@ -431,7 +437,7 @@ public class DisplayHttpServer extends NanoHTTPD {
 "</html>";
     }
 
-    // ==================== Handler：心跳 ====================
+    // ==================== Handler：更新 ====================
 
     private Response handlePing() {
         StringBuilder sb = new StringBuilder();
