@@ -432,7 +432,7 @@ public class SunmiPrinterManager {
                     // 主行：數量在前。用 printColumnsString 對齊：
                     //   廚房單 = [數量][品名]（不印價格）
                     //   顧客單 = [數量][品名][價格]
-                                       String qtyCol = fItemQty ? ("x" + qty) : "";
+                    String qtyCol = (fItemQty && qty > 1) ? ("x" + qty) : "";
                     if (isKitchen) {
                         // v20260620 修正廚房單品名無法放大：原本用 printColumnsString 印品名，
                         // 但該方法不吃字級（setFontSize 對欄位列印在 T2 無效），導致 30/50 印出來一樣大。
@@ -443,7 +443,7 @@ public class SunmiPrinterManager {
                     } else {
 
                         // 顧客單三欄：數量 4、品名 18、價格 10（靠右）
-                        String priceCol = fItemPrice ? ("$" + String.format("%.0f", price)) : "";
+                        String priceCol = (fItemPrice && price > 0) ? ("$" + String.format("%.0f", price)) : "";
                         String[] cols = { qtyCol, name, priceCol };
                         int[] widths  = { 4, 18, 10 };
                         int[] aligns  = { 0, 0, 2 };
