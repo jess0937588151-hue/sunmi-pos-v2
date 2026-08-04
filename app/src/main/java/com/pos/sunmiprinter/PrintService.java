@@ -109,7 +109,9 @@ public class PrintService extends Service {
         // v20260602 啟動客顯 HTTP Server（8081），與列印 server 同生命週期常駐
         startDisplayServer();
         handler.postDelayed(displayWatchdog, DISPLAY_WATCHDOG_MS);        
-      
+              handler.postDelayed(this::setupSecondaryDisplay, 3000);
+        registerDisplayListener();
+
 
             // 取得 PARTIAL_WAKE_LOCK，避免螢幕關掉時 NanoHTTPD 接收延遲
         try {
@@ -327,10 +329,13 @@ public class PrintService extends Service {
 
             customerPresentation = new CustomerPresentation(this, target);
             // Service 要用 Presentation 必須是 system alert 類型的 window
-            if (customerPresentation.getWindow() != null) {
-                customerPresentation.getWindow().setType(
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+                       if (customerPresentation.getWindow() != null) {
+                int overlayType = (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY  // API 26+
+                        : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;        // API 25 及以下（你的 T2 7.1 走這條）
+                customerPresentation.getWindow().setType(overlayType);
             }
+
             customerPresentation.show();
             LogManager.i(TAG, "setupSecondaryDisplay: 客顯已顯示於副螢幕");
         } catch (Throwable t) {
