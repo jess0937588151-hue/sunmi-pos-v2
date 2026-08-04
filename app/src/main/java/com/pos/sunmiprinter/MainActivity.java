@@ -23,6 +23,13 @@ import java.util.List;
 import android.net.Uri;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.app.Presentation;
+import android.content.Context;
+import android.hardware.display.DisplayManager;
+import android.view.Display;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.webkit.WebSettings;
 
 
 /**
@@ -39,6 +46,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final String APK_VERSION = "v20260602"; // ← 版號同步升至 v20260602
     private static final long REFRESH_INTERVAL_MS = 3000;
+    // v20260804: 副螢幕客顯（掛前景 Activity，免 overlay 權限）
+private Presentation customerPresentation;
+private DisplayManager.DisplayListener displayListener;
+
 
     private static final int COLOR_TEXT    = Color.parseColor("#212121");
     private static final int COLOR_HINT    = Color.parseColor("#757575");
@@ -129,13 +140,17 @@ public class MainActivity extends AppCompatActivity {
             LogManager.e("DISPLAY", "detect display failed", t);
         }
 
-        // v20260602 移除：客顯 server 已改由 PrintService 常駐，不再於此啟動
+                // v20260804: 掛副螢幕客顯（延遲 3 秒等 DisplayHttpServer 8081 起來）
+        handler.postDelayed(this::setupSecondaryDisplay, 3000);
+        registerDisplayListener();
+
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         handler.post(refreshTask);
+        setupSecondaryDisplay();   // v20260804: 回前景時確保客顯還在
     }
 
     @Override
@@ -145,13 +160,83 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+        @Override
     protected void onDestroy() {
         super.onDestroy();
+        // v20260804: 收掉副螢幕客顯
+        dismissSecondaryDisplay();
+        try {
+            if (displayListener != null) {
+                DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+                if (dm != null) dm.unregisterDisplayListener(displayListener);
+                displayListener = null;
+            }
+        } catch (Throwable ignored) {}
         if (serviceBound) {
             unbindService(serviceConnection);
             serviceBound = false;
         }
-        // v20260602 移除：客顯 server 由 PrintService 管理，本頁關閉不應停止客顯
+    }
+
+        // ============ v20260804 副螢幕客顯（Presentation + WebView，免 overlay 權限）============
+
+    private class CustomerPresentation extends Presentation {
+        CustomerPresentation(Context ctx, Display display) { super(ctx, display); }
+        @Override protected void onCreate(Bundle b) {
+            super.onCreate(b);
+            WebView web = new WebView(getContext());
+            WebSettings ws = web.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+            ws.setMediaPlaybackRequiresUserGesture(false);
+            web.setWebViewClient(new WebViewClient());
+            web.loadUrl("http://127.0.0.1:" + DisplayHttpServer.DEFAULT_PORT + "/display/");
+            setContentView(web);
+        }
+    }
+
+    private void setupSecondaryDisplay() {
+        try {
+            DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            if (dm == null) return;
+            Display[] ds = dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+            if (ds == null || ds.length == 0) { dismissSecondaryDisplay(); return; }
+            Display target = ds[0];
+            if (customerPresentation != null && customerPresentation.isShowing()
+                    && customerPresentation.getDisplay() != null
+                    && customerPresentation.getDisplay().getDisplayId() == target.getDisplayId()) {
+                return; // 已在同一螢幕顯示，不重建
+            }
+            dismissSecondaryDisplay();
+            customerPresentation = new CustomerPresentation(this, target);
+            customerPresentation.show();
+            LogManager.i(TAG, "客顯已顯示於副螢幕 id=" + target.getDisplayId());
+        } catch (Throwable t) {
+            LogManager.w(TAG, "setupSecondaryDisplay error: " + t.getMessage());
+        }
+    }
+
+    private void dismissSecondaryDisplay() {
+        if (customerPresentation != null) {
+            try { customerPresentation.dismiss(); } catch (Throwable ignored) {}
+            customerPresentation = null;
+        }
+    }
+
+    private void registerDisplayListener() {
+        try {
+            DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            if (dm == null || displayListener != null) return;
+            displayListener = new DisplayManager.DisplayListener() {
+                @Override public void onDisplayAdded(int id)   { handler.postDelayed(MainActivity.this::setupSecondaryDisplay, 800); }
+                @Override public void onDisplayRemoved(int id) { handler.post(MainActivity.this::dismissSecondaryDisplay); }
+                @Override public void onDisplayChanged(int id) {}
+            };
+            dm.registerDisplayListener(displayListener, handler);
+        } catch (Throwable t) {
+            LogManager.w(TAG, "registerDisplayListener error: " + t.getMessage());
+        }
     }
 
     // ==================== 建立 UI ====================
