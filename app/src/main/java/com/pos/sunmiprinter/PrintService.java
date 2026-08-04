@@ -26,6 +26,13 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Enumeration;
+import android.app.Presentation;
+import android.hardware.display.DisplayManager;
+import android.view.Display;
+import android.view.WindowManager;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.webkit.WebSettings;
 
 /**
  * 後台 Foreground Service
@@ -53,6 +60,9 @@ public class PrintService extends Service {
     // ── 核心元件 ──
     private PrintHttpServer httpServer;
     private DisplayHttpServer displayHttpServer;   // v20260602 客顯 server（移入 Service 常駐）
+    // v20260804: 副螢幕（HDMI 客顯）Presentation
+    private CustomerPresentation customerPresentation;
+    private DisplayManager.DisplayListener displayListener;
     private SunmiPrinterManager sunmiPrinter;
     private BluetoothPrinterManager btPrinter;
     private NetworkPrinterManager netPrinter;
@@ -98,8 +108,10 @@ public class PrintService extends Service {
 
         // v20260602 啟動客顯 HTTP Server（8081），與列印 server 同生命週期常駐
         startDisplayServer();
-        handler.postDelayed(displayWatchdog, DISPLAY_WATCHDOG_MS);
-if (handler != null) handler.removeCallbacks(displayWatchdog);
+        handler.postDelayed(displayWatchdog, DISPLAY_WATCHDOG_MS);        
+        // v20260804: 延遲 3 秒掛副螢幕客顯（等 DisplayHttpServer 8081 起來）
+        handler.postDelayed(this::setupSecondaryDisplay, 3000);
+        registerDisplayListener();
 
             // 取得 PARTIAL_WAKE_LOCK，避免螢幕關掉時 NanoHTTPD 接收延遲
         try {
@@ -144,6 +156,16 @@ if (handler != null) handler.removeCallbacks(displayWatchdog);
         Log.d(TAG, "onDestroy");
         stopHttpServer();
         stopDisplayServer();   // v20260602
+                // v20260804: 收掉副螢幕客顯
+        dismissSecondaryDisplay();
+        try {
+            if (displayListener != null) {
+                DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+                if (dm != null) dm.unregisterDisplayListener(displayListener);
+                displayListener = null;
+            }
+        } catch (Throwable ignored) {}
+
         if (sunmiPrinter != null) sunmiPrinter.unbind();
         if (btPrinter != null) btPrinter.disconnect();
         if (netPrinter != null) netPrinter.disconnect();
@@ -253,6 +275,103 @@ if (handler != null) handler.removeCallbacks(displayWatchdog);
             displayHttpServer = null;
         }
     }
+        // ================= v20260804 副螢幕客顯（Presentation + WebView）=================
+
+    /** 內嵌 Presentation：在副螢幕用 WebView 載入現成的 8081 客顯頁 */
+    private class CustomerPresentation extends Presentation {
+        CustomerPresentation(Context outerContext, Display display) {
+            super(outerContext, display);
+        }
+
+        @Override
+        protected void onCreate(android.os.Bundle savedInstanceState) {
+            super.onCreate(savedInstanceState);
+            WebView web = new WebView(getContext());
+            WebSettings ws = web.getSettings();
+            ws.setJavaScriptEnabled(true);
+            ws.setDomStorageEnabled(true);
+            ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+            ws.setMediaPlaybackRequiresUserGesture(false);
+            web.setWebViewClient(new WebViewClient());
+            int port = DisplayHttpServer.DEFAULT_PORT; // 8081
+            web.loadUrl("http://127.0.0.1:" + port + "/display/");
+            setContentView(web);
+        }
+    }
+
+    /** 找到副螢幕並把 Presentation show 上去（可重複呼叫，具冪等性） */
+    private void setupSecondaryDisplay() {
+        try {
+            DisplayManager dm = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            if (dm == null) return;
+
+            Display[] presDisplays = dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+            if (presDisplays == null || presDisplays.length == 0) {
+                LogManager.i(TAG, "setupSecondaryDisplay: 找不到副螢幕，跳過");
+                dismissSecondaryDisplay();
+                return;
+            }
+
+            Display target = presDisplays[0]; // log 顯示 id=1 HDMI 螢幕
+            LogManager.i(TAG, "setupSecondaryDisplay: 目標副螢幕 id="
+                    + target.getDisplayId() + " name=" + target.getName());
+
+            // 已經在同一個螢幕顯示中就不用重建
+            if (customerPresentation != null
+                    && customerPresentation.isShowing()
+                    && customerPresentation.getDisplay() != null
+                    && customerPresentation.getDisplay().getDisplayId() == target.getDisplayId()) {
+                LogManager.i(TAG, "setupSecondaryDisplay: 副螢幕已在顯示，略過");
+                return;
+            }
+
+            dismissSecondaryDisplay(); // 先清掉舊的
+
+            customerPresentation = new CustomerPresentation(this, target);
+            // Service 要用 Presentation 必須是 system alert 類型的 window
+            if (customerPresentation.getWindow() != null) {
+                customerPresentation.getWindow().setType(
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+            }
+            customerPresentation.show();
+            LogManager.i(TAG, "setupSecondaryDisplay: 客顯已顯示於副螢幕");
+        } catch (Throwable t) {
+            LogManager.w(TAG, "setupSecondaryDisplay error: " + t.getMessage());
+        }
+    }
+
+    private void dismissSecondaryDisplay() {
+        if (customerPresentation != null) {
+            try { customerPresentation.dismiss(); } catch (Throwable ignored) {}
+            customerPresentation = null;
+        }
+    }
+
+    /** 監聽副螢幕插拔：插上就 show，拔掉就 dismiss */
+    private void registerDisplayListener() {
+        try {
+            final DisplayManager dm =
+                    (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            if (dm == null) return;
+            displayListener = new DisplayManager.DisplayListener() {
+                @Override public void onDisplayAdded(int displayId) {
+                    LogManager.i(TAG, "onDisplayAdded id=" + displayId);
+                    if (handler != null) handler.postDelayed(
+                            PrintService.this::setupSecondaryDisplay, 1000);
+                }
+                @Override public void onDisplayRemoved(int displayId) {
+                    LogManager.i(TAG, "onDisplayRemoved id=" + displayId);
+                    if (handler != null) handler.post(
+                            PrintService.this::dismissSecondaryDisplay);
+                }
+                @Override public void onDisplayChanged(int displayId) {}
+            };
+            dm.registerDisplayListener(displayListener, handler);
+        } catch (Throwable t) {
+            LogManager.w(TAG, "registerDisplayListener error: " + t.getMessage());
+        }
+    }
+
 // v20260602b: 客顯 server 看門狗——每 30 秒檢查 8081 是否還活著，掛了就自動重啟
 private static final long DISPLAY_WATCHDOG_MS = 30000;
 private final Runnable displayWatchdog = new Runnable() {
