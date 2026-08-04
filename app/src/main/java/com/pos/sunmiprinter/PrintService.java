@@ -109,9 +109,7 @@ public class PrintService extends Service {
         // v20260602 啟動客顯 HTTP Server（8081），與列印 server 同生命週期常駐
         startDisplayServer();
         handler.postDelayed(displayWatchdog, DISPLAY_WATCHDOG_MS);        
-        // v20260804: 延遲 3 秒掛副螢幕客顯（等 DisplayHttpServer 8081 起來）
-        handler.postDelayed(this::setupSecondaryDisplay, 3000);
-        registerDisplayListener();
+      
 
             // 取得 PARTIAL_WAKE_LOCK，避免螢幕關掉時 NanoHTTPD 接收延遲
         try {
