@@ -284,6 +284,7 @@ public class DisplayHttpServer extends NanoHTTPD {
 "var POLL_MS=1000,PAID_STAY=5,CIRC=125.66,SLIDE_MS=4000;\n" +
 "var cur='idle',paidTmr=null,paidLeft=0,lastJson='',connOk=false;\n" +
 "var slideUrls=[],slideKey='',slideTmr=null,slideIdx=0;\n" +
+"var cartScrollTmr=null;\n" +
 "function $(id){return document.getElementById(id);}\n" +
 "function esc(s){return String(s==null?'':s)\n" +
 "  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')\n" +
@@ -380,6 +381,20 @@ public class DisplayHttpServer extends NanoHTTPD {
 "    list.appendChild(div);\n" +
 "  });\n" +
 "  setupSlides(d.slides);\n" +
+"  if(cartScrollTmr){clearInterval(cartScrollTmr);cartScrollTmr=null;}\n" +
+"  var box=$('cartItemList');\n" +
+"  if(box){\n" +
+"    box.scrollTop=0;\n" +
+"    setTimeout(function(){\n" +
+"      if(box.scrollHeight>box.clientHeight+4){\n" +
+"        cartScrollTmr=setInterval(function(){\n" +
+"          if(box.scrollTop+box.clientHeight>=box.scrollHeight-2){\n" +
+"            setTimeout(function(){box.scrollTop=0;},1500);\n" +
+"          }else{box.scrollTop+=1;}\n" +
+"        },40);\n" +
+"      }\n" +
+"    },500);\n" +
+"  }\n" +            
 "}\n" +
 "\n" +
 "/* 渲染：付款完成 */\n" +
