@@ -316,24 +316,38 @@ public class PrintService extends Service {
         ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
         ws.setMediaPlaybackRequiresUserGesture(false);
         ws.setUseWideViewPort(true);
-        ws.setLoadWithOverviewMode(true);
+        ws.setLoadWithOverviewMode(false);
+
 
         // WebView 用真實尺寸鎖死（不是 MATCH_PARENT，避免拿到錯的父層尺寸）
         web.setLayoutParams(new android.widget.FrameLayout.LayoutParams(realW, realH));
 
         // 載入完成後，再用真實尺寸套一次並重排（雙保險）
         web.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                android.view.ViewGroup.LayoutParams lp = view.getLayoutParams();
-                lp.width = realW;
-                lp.height = realH;
-                view.setLayoutParams(lp);
-                view.requestLayout();
-                view.invalidate();
-            }
-        });
+    @Override
+    public void onPageFinished(WebView view, String url) {
+        super.onPageFinished(view, url);
+        // 用副屏真實寬度動態設定網頁 viewport，任何解析度都自適應
+        String js =
+            "javascript:(function(){" +
+            "var w=" + realW + ";" +
+            "var m=document.querySelector('meta[name=viewport]');" +
+            "if(!m){m=document.createElement('meta');m.name='viewport';" +
+            "document.getElementsByTagName('head')[0].appendChild(m);}" +
+            "m.setAttribute('content','width='+w+',initial-scale=1,maximum-scale=1,user-scalable=no');" +
+            "document.documentElement.style.width=w+'px';" +
+            "document.body.style.width=w+'px';" +
+            "})()";
+        view.evaluateJavascript(js, null);
+        android.view.ViewGroup.LayoutParams lp = view.getLayoutParams();
+        lp.width = realW;
+        lp.height = realH;
+        view.setLayoutParams(lp);
+        view.requestLayout();
+        view.invalidate();
+    }
+});
+
 
         int port = DisplayHttpServer.DEFAULT_PORT; // 8081
         web.loadUrl("http://127.0.0.1:" + port + "/display/");
