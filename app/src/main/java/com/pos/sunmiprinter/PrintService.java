@@ -284,22 +284,44 @@ public class PrintService extends Service {
         }
 
         @Override
-        protected void onCreate(android.os.Bundle savedInstanceState) {
-            super.onCreate(savedInstanceState);
-            WebView web = new WebView(getContext());
-            WebSettings ws = web.getSettings();
-            ws.setJavaScriptEnabled(true);
-            ws.setDomStorageEnabled(true);
-            ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
-            ws.setMediaPlaybackRequiresUserGesture(false);
-            ws.setUseWideViewPort(true);
-            ws.setLoadWithOverviewMode(true);
-             web.setInitialScale(0);
-            web.setWebViewClient(new WebViewClient());
-            int port = DisplayHttpServer.DEFAULT_PORT; // 8081
-            web.loadUrl("http://127.0.0.1:" + port + "/display/");
-            setContentView(web);
+protected void onCreate(android.os.Bundle savedInstanceState) {
+    super.onCreate(savedInstanceState);
+    WebView web = new WebView(getContext());
+    WebSettings ws = web.getSettings();
+    ws.setJavaScriptEnabled(true);
+    ws.setDomStorageEnabled(true);
+    ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+    ws.setMediaPlaybackRequiresUserGesture(false);
+    ws.setUseWideViewPort(true);
+    ws.setLoadWithOverviewMode(true);
+
+    // 關鍵:強制 WebView 用滿版 LayoutParams 鋪滿整個 Presentation
+    web.setLayoutParams(new android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+
+    // 關鍵:頁面載入完成後強制重新佈局,讓 vw/100% 以正確尺寸重算
+    web.setWebViewClient(new WebViewClient() {
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+            view.requestLayout();
+            view.invalidate();
         }
+    });
+
+    int port = DisplayHttpServer.DEFAULT_PORT; // 8081
+    web.loadUrl("http://127.0.0.1:" + port + "/display/");
+
+    // 用 FrameLayout 包起來當 content view,確保填滿
+    android.widget.FrameLayout root = new android.widget.FrameLayout(getContext());
+    root.setLayoutParams(new android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+    root.addView(web);
+    setContentView(root);
+}
+
     }
 
     /** 找到副螢幕並把 Presentation show 上去（可重複呼叫，具冪等性） */
