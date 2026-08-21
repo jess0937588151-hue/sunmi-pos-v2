@@ -292,6 +292,9 @@ public class PrintService extends Service {
             ws.setDomStorageEnabled(true);
             ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
             ws.setMediaPlaybackRequiresUserGesture(false);
+            ws.setUseWideViewPort(true);
+            ws.setLoadWithOverviewMode(true)
+             web.setInitialScale(0);
             web.setWebViewClient(new WebViewClient());
             int port = DisplayHttpServer.DEFAULT_PORT; // 8081
             web.loadUrl("http://127.0.0.1:" + port + "/display/");
