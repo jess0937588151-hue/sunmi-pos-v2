@@ -278,51 +278,74 @@ public class PrintService extends Service {
         // ================= v20260804 副螢幕客顯（Presentation + WebView）=================
 
     /** 內嵌 Presentation：在副螢幕用 WebView 載入現成的 8081 客顯頁 */
-    private class CustomerPresentation extends Presentation {
-        CustomerPresentation(Context outerContext, Display display) {
-            super(outerContext, display);
+ private class CustomerPresentation extends Presentation {
+
+    CustomerPresentation(Context outerContext, Display display) {
+        super(outerContext, display);
+    }
+
+    @Override
+    protected void onCreate(android.os.Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // ---- 1. 量測副屏「真實」解析度（不信系統回報的邏輯尺寸）----
+        final int realW, realH;
+        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+        try {
+            getDisplay().getRealMetrics(dm);
+        } catch (Throwable t) {
+            getContext().getResources().getDisplayMetrics().setTo(dm);
+        }
+        realW = dm.widthPixels;
+        realH = dm.heightPixels;
+        LogManager.i(TAG, "CustomerPresentation 副屏真實尺寸 w=" + realW + " h=" + realH);
+
+        // ---- 2. 強制視窗鋪滿整個副屏 ----
+        if (getWindow() != null) {
+            getWindow().setLayout(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT);
+            getWindow().setBackgroundDrawable(null);
         }
 
-        @Override
-protected void onCreate(android.os.Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
-    WebView web = new WebView(getContext());
-    WebSettings ws = web.getSettings();
-    ws.setJavaScriptEnabled(true);
-    ws.setDomStorageEnabled(true);
-    ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
-    ws.setMediaPlaybackRequiresUserGesture(false);
-    ws.setUseWideViewPort(true);
-    ws.setLoadWithOverviewMode(true);
+        // ---- 3. 建立 WebView ----
+        WebView web = new WebView(getContext());
+        WebSettings ws = web.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        ws.setMediaPlaybackRequiresUserGesture(false);
+        ws.setUseWideViewPort(true);
+        ws.setLoadWithOverviewMode(true);
 
-    // 關鍵:強制 WebView 用滿版 LayoutParams 鋪滿整個 Presentation
-    web.setLayoutParams(new android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+        // WebView 用真實尺寸鎖死（不是 MATCH_PARENT，避免拿到錯的父層尺寸）
+        web.setLayoutParams(new android.widget.FrameLayout.LayoutParams(realW, realH));
 
-    // 關鍵:頁面載入完成後強制重新佈局,讓 vw/100% 以正確尺寸重算
-    web.setWebViewClient(new WebViewClient() {
-        @Override
-        public void onPageFinished(WebView view, String url) {
-            super.onPageFinished(view, url);
-            view.requestLayout();
-            view.invalidate();
-        }
-    });
+        // 載入完成後，再用真實尺寸套一次並重排（雙保險）
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                android.view.ViewGroup.LayoutParams lp = view.getLayoutParams();
+                lp.width = realW;
+                lp.height = realH;
+                view.setLayoutParams(lp);
+                view.requestLayout();
+                view.invalidate();
+            }
+        });
 
-    int port = DisplayHttpServer.DEFAULT_PORT; // 8081
-    web.loadUrl("http://127.0.0.1:" + port + "/display/");
+        int port = DisplayHttpServer.DEFAULT_PORT; // 8081
+        web.loadUrl("http://127.0.0.1:" + port + "/display/");
 
-    // 用 FrameLayout 包起來當 content view,確保填滿
-    android.widget.FrameLayout root = new android.widget.FrameLayout(getContext());
-    root.setLayoutParams(new android.view.ViewGroup.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT));
-    root.addView(web);
-    setContentView(root);
+        // ---- 4. FrameLayout 容器也鎖真實尺寸 ----
+        android.widget.FrameLayout root = new android.widget.FrameLayout(getContext());
+        root.setLayoutParams(new android.view.ViewGroup.LayoutParams(realW, realH));
+        root.addView(web);
+        setContentView(root);
+    }
 }
 
-    }
 
     /** 找到副螢幕並把 Presentation show 上去（可重複呼叫，具冪等性） */
     private void setupSecondaryDisplay() {
